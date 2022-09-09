@@ -1,0 +1,368 @@
+---
+title: "Comparison of Extraction Methods (proteins)"
+subtitle: "Thorax"
+author:
+    - Thomas Naake^[European Molecular Biology Laboratory, Meyerhofstrasse 1, 69117 Heidelberg, Germany]
+fig_width: 15
+fig_height: 10
+fontsize: 12pt
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float: TRUE
+    theme: united
+    number_sections: true
+    highlight: tango
+---
+
+```{r env, include=FALSE, echo=FALSE, cache=FALSE}
+library("knitr")
+library("ggplot2")
+knitr::opts_chunk$set(stop_on_error = 1L, fig.pos = "ht", dev = "png")
+suppressPackageStartupMessages(library("wesanderson"))
+suppressPackageStartupMessages(library("MatrixQCvis"))
+suppressPackageStartupMessages(library("MatrixQCvisUtils"))
+suppressPackageStartupMessages(library("PhysicoChemicalPropertiesProtein"))
+suppressPackageStartupMessages(library("tidyverse"))
+suppressPackageStartupMessages(library("limma"))
+knitr::opts_knit$set(root.dir = "~/GitLab/20211202_extraction_method/")
+```
+
+# Load data 
+
+```{r load_data}
+se <- maxQuant("proteinGroups_thorax.xlsx", intensity = "LFQ", type = "xlsx", 
+    sheet = "filtered")
+
+## load annotation
+cD <- openxlsx::read.xlsx("proteinGroups_thorax.xlsx", sheet = "annotation_filtered")
+cD[, "Sample_IDs"] <- make.names(cD[, "Sample_IDs"])
+colnames(cD)[colnames(cD) == "Sample_IDs"] <- "name"
+
+## truncate se and write cD to colData(se)
+se <- se[, cD$name]
+se@colData <- cD %>% DataFrame()
+colnames(se) <- se$name
+
+## truncate colnames
+colnames(se) <- stringr::str_replace(colnames(se), 
+    "LFQ.intensity.1_KL_ProtMet_IO_40min_DDA_", "ProtMet_")
+colnames(se) <- stringr::str_replace(colnames(se), 
+    "LFQ.intensity.5_KL_nWorkFlow_IO_40min_DDA_", "nWorkFlow_")
+colnames(se) <- stringr::str_replace(colnames(se), 
+    "LFQ.intensity.5_KL_nWorkFlowt_IO_40min_DDA_", "nWorkFlow")
+
+se$name <- colnames(se)
+```
+
+# QC
+
+```{r shinyQC, eval = FALSE}
+shinyQC(se)
+```
+
+Exclude the following samples:
+`ProtMet_8U04FR_NG_14_B10_1_6020`, `ProtMet_IJ17TV_NG_12_B8_1_6016`.
+
+```{r exclude_samples}
+se <- MatrixQCvis:::selectSampleSE(se, 
+    selection = c("ProtMet_8U04FR_NG_14_B10_1_6020", "ProtMet_IJ17TV_NG_12_B8_1_6016"),
+    mode = "exclude")
+```
+
+## Translate the protein IDs
+
+Translate Uniprot into Symbol.
+
+```{r, message=FALSE, warning=FALSE}
+library("org.Hs.eg.db")
+uniprots <- Rkeys(org.Hs.egUNIPROT)
+dict <- AnnotationDbi::select(org.Hs.eg.db, uniprots, "SYMBOL", "UNIPROT")
+uniprot <- dict$UNIPROT
+symbol <- dict$SYMBOL
+names(symbol) <- uniprot
+
+## rename
+rownames(se) <- unlist(lapply(rownames(se), 
+    function(x) paste(symbol[strsplit(x, split = ";")[[1]]], collapse = ";")))
+
+## remove the features that have no corresponding Symbol
+exclude_pattern <- c("NA", "NA;NA", "NA;NA;NA", "NA;NA;NA;NA", 
+    "NA;NA;NA;NA;NA", "NA;NA;NA;NA;NA;NA", "NA;NA;NA;NA;NA;NA;NA")
+se <- se[!rownames(se) %in% exclude_pattern, ]
+```
+
+# Data Filtering, Transformation, and Imputation
+
+Perform `log`-transformation on the data set.
+
+```{r data_transformation}
+## keep features with more than ca. 91% (32/35) measured values
+se <- se[rowSums(is.na(assay(se))) < 4 , ]
+
+## transformation and imputation
+a <- assay(se)
+a_t <- transformAssay(a, method = "log")
+se <- MatrixQCvis:::updateSE(se = se, assay = a_t)
+
+saveRDS(se, file = "SummarizedExperiment_extraction_method_cohort_proteomics.RDS")
+```
+
+# Run the linear model
+
+```{r}
+cD <- colData(se)
+cD$Type_Processing <- paste(cD$Type, cD$Processing, sep = "_")
+cD$Individual <- stringr::str_remove(cD$Pseudonym, pattern = "_NG|_TU")
+design <- model.matrix(~ 0 + Type_Processing, data = cD)
+colnames(design) <- make.names(colnames(design))
+cor <- duplicateCorrelation(assay(se), design, block=cD$Individual)
+fit <- lmFit(object = assay(se), design = design, block = cD$Individual,
+    correlation = cor$consensus)
+
+## create contrasts
+contrasts <- makeContrasts(
+    autoSP3vsMTBE_SP3 = (Type_ProcessingTU_autoSP3 - Type_ProcessingNG_autoSP3)/2 -
+        (Type_ProcessingTU_MTBE_SP3 - Type_ProcessingNG_MTBE_SP3)/2,
+    TUvsNG = (Type_ProcessingTU_autoSP3 - Type_ProcessingTU_MTBE_SP3)/2 -
+        (Type_ProcessingNG_autoSP3 - Type_ProcessingNG_MTBE_SP3)/2, ## identical to autoSP3vsMTBE_SP3 
+    NG_autoSP3vsMTBE_SP3 = Type_ProcessingNG_autoSP3 - Type_ProcessingNG_MTBE_SP3,
+    TU_autoSP3vsMTBE_SP3 = Type_ProcessingTU_autoSP3 - Type_ProcessingTU_MTBE_SP3,
+    autoSP3 = Type_ProcessingTU_autoSP3 - Type_ProcessingNG_autoSP3,
+    MTBE_SP3 = Type_ProcessingTU_MTBE_SP3 - Type_ProcessingNG_MTBE_SP3,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+## set parameters for differential expression
+num <- Inf
+p_val <- 1
+adj <- "BH"
+```  
+
+
+## autoSP3 vs. MTBE_SP3
+
+We test here the DE proteins between NG and TU and compare the results that
+we get from the two extraction methods. 
+
+Ideally, this should result in few DE proteins. This would indicate that the 
+methods yield similar results.
+
+```{r autoSP3vsMTBE_SP3}
+tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
+    coef = "autoSP3vsMTBE_SP3")
+rmarkdown::paged_table(tT)
+tT <- cbind(name = rownames(tT), tT)
+volcanoPlot(tT)
+tT_autoSP3vsMTBE <- tT
+
+write.table(tT, file = "proteomics_DE_t_autoSP3vsMTBE_SP3.txt", 
+    quote = FALSE, sep = "\t")
+```
+
+## autoSP3 vs. MTBE_SP3 (NG)
+
+We test here the DE proteins from the two extraction methods looking only at 
+NG. 
+
+Ideally, this should result in few DE proteins. This would indicate that the 
+methods yield similar results.
+
+```{r NG_autoSP3vsMTBE_SP3}
+tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
+    coef = "NG_autoSP3vsMTBE_SP3")
+rmarkdown::paged_table(tT)
+tT <- cbind(name = rownames(tT), tT)
+volcanoPlot(tT)
+tT_NG <- tT
+
+write.table(tT, file = "proteomics_DE_t_NG_autoSP3vsMTBE_SP3.txt", 
+    quote = FALSE, sep = "\t")
+```
+
+
+## autoSP3 vs. MTBE_SP3 (TU)
+
+We test here the DE proteins from the two extraction methods looking only at 
+TU 
+
+Ideally, this should result in few DE proteins. This would indicate that the 
+methods yield similar results.
+
+```{r TU_autoSP3vsMTBE_SP3}
+tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
+    coef = "TU_autoSP3vsMTBE_SP3")
+rmarkdown::paged_table(tT)
+tT <- cbind(name = rownames(tT), tT)
+volcanoPlot(tT)
+tT_TU <- tT
+
+write.table(tT, file = "proteomics_DE_t_TU_autoSP3vsMTBE_SP3.txt", 
+    quote = FALSE, sep = "\t")
+```
+
+
+Ok, this is interesting, when looking at the individual tissues, there are quite
+many differences, but the differences "vanish" when we combine the different
+conditions (autoSP3 vs. MTBE_SP3).
+
+## Overlap between DE proteins
+
+We will continue and check the overlap of DE proteins between the contrasts
+
+    - autoSP3 vs. MTBE_SP3 (NG)
+    - autoSP3 vs. MTBE_SP3 (TU)
+    - autoSP3 vs. MTBE_SP3 (TU-NG)
+    
+```{r de_overlap_1}
+## only continue with the significant ones
+NG_sign <- tT_NG[tT_NG$adj.P.Val < 0.05 & !is.na(tT_NG$adj.P.Val), ]
+dim(NG_sign)
+TU_sign <- tT_TU[tT_TU$adj.P.Val < 0.05 & !is.na(tT_TU$adj.P.Val), ]
+dim(TU_sign)
+autoSP3vsMTBE_sign <- tT_autoSP3vsMTBE[tT_autoSP3vsMTBE$adj.P.Val < 0.05 & !is.na(tT_autoSP3vsMTBE$adj.P.Val), ]
+dim(autoSP3vsMTBE_sign)
+
+## create list
+l <- list(NG = rownames(NG_sign), TU = rownames(TU_sign), 
+    autoSP3vsMTBE_SP3 = rownames(autoSP3vsMTBE_sign))
+UpSetR::upset(UpSetR::fromList(l), order.by = "freq")
+
+pdf("UpSet_NAT_TT_autoSP3vsMTBESP3.pdf")
+UpSetR::upset(UpSetR::fromList(l), order.by = "freq")
+dev.off()
+```
+
+
+We will continue and check the overlap of DE proteins between the contrasts:
+    
+    - TU vs. NG (autoSP3)
+    - TU vs. NG (MTBE_SP3)
+    
+```{r de_overlap}
+## autoSP3
+tT_autoSP3 <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
+    coef = "autoSP3")
+rmarkdown::paged_table(tT_autoSP3)
+sum(tT_autoSP3$adj.P.Val < 0.05, na.rm = TRUE)
+tT_autoSP3 <- cbind(name = rownames(tT_autoSP3), tT_autoSP3)
+volcanoPlot(tT_autoSP3)
+write.table(tT_autoSP3, file = "proteomics_DE_t_TUvsNG_autoSP3.txt", 
+    quote = FALSE, sep = "\t")
+
+## MTBE_SP3
+tT_MTBE_SP3 <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
+    coef = "MTBE_SP3")
+rmarkdown::paged_table(tT_MTBE_SP3)
+sum(tT_MTBE_SP3$adj.P.Val < 0.05, na.rm = TRUE)
+tT_MTBE_SP3 <- cbind(name = rownames(tT_MTBE_SP3), tT_MTBE_SP3)
+volcanoPlot(tT_MTBE_SP3)
+
+write.table(tT, file = "proteomics_DE_t_TUvsNG_MTBE_SP3.txt", 
+    quote = FALSE, sep = "\t")
+
+## only continue with the significant ones 
+autoSP3_sign <- tT_autoSP3[tT_autoSP3$adj.P.Val < 0.05 & !is.na(tT_autoSP3$adj.P.Val), ]
+MTBE_SP3_sign <- tT_MTBE_SP3[tT_MTBE_SP3$adj.P.Val < 0.05  & !is.na(tT_MTBE_SP3$adj.P.Val), ]
+
+## create list
+l <- list(autoSP3 = rownames(autoSP3_sign), MTBE_SP3 = rownames(MTBE_SP3_sign))
+UpSetR::upset(UpSetR::fromList(l), order.by = "freq")
+
+pdf("UpSet_NATvsTT_autoSP3_MTBESP3.pdf")
+UpSetR::upset(UpSetR::fromList(l), order.by = "freq")
+dev.off()
+
+## TU vs NG. (taking into account baseline autoSP3/MTBE-SP3)
+tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
+    coef = "TUvsNG")
+rmarkdown::paged_table(tT)
+tT <- cbind(name = rownames(tT), tT)
+volcanoPlot(tT)
+tT_TUvsNG <- tT
+
+## plot t-values
+df <- data.frame(vals_x = tT_autoSP3[rownames(tT_autoSP3), "t"], 
+        vals_y = tT_MTBE_SP3[rownames(tT_autoSP3), "t"],
+        vals_z = tT_TUvsNG[rownames(tT_autoSP3), "t"])
+
+## t-values(autoSP3) vs t-values (MTBE-SP3)
+g <- ggplot(df, aes_string(x = "vals_x", y = "vals_y")) +
+    geom_point(aes(alpha = 0.7)) +
+    xlab("t-values (autoSP3)") + ylab("t-values (MTBE-SP3)") +
+    ggpubr::stat_cor(method = "spearman", cor.coef.name = "rho") +
+    ggtitle("NAT vs. TT") +
+    theme_classic() +
+    theme(legend.position = "none")
+g 
+ggsave(g, filename = "scatter_NATvsTT_autoSP3_MTBESP3.pdf")
+cor.test(tT_autoSP3$t[order(rownames(tT_autoSP3))],
+    tT_MTBE_SP3$t[order(rownames(tT_MTBE_SP3))], method = "spearman")
+
+## t-values(autoSP3) vs t-values (AutoSP3vsMTBE-SP3)
+g <- ggplot(df, aes_string(x = "vals_x", y = "vals_z")) +
+    geom_point(aes(alpha = 0.7)) +
+    xlab("t-values (autoSP3)") + ylab("t-values (autoSP3/MTBE-SP3)") +
+    ggpubr::stat_cor(method = "spearman", cor.coef.name = "rho") +
+    ggtitle("NAT vs. TT") +
+    theme_classic() +
+    theme(legend.position = "none")
+g 
+ggsave(g, filename = "scatter_NATvsTT_autoSP3_autoSP3vsMTBESP3.pdf")
+
+## t-values(MTBE-SP3) vs t-values (AutoSP3vsMTBE-SP3)
+g <- ggplot(df, aes_string(x = "vals_y", y = "vals_z")) +
+    geom_point(aes(alpha = 0.7)) +
+    xlab("t-values (MTBE-SP3)") + ylab("t-values (autoSP3/MTBE-SP3)") +
+    ggpubr::stat_cor(method = "spearman", cor.coef.name = "rho") +
+    ggtitle("NAT vs. TT") +
+    theme_classic() +
+    theme(legend.position = "none")
+g 
+ggsave(g, filename = "scatter_NATvsTT_MTBESP3_autoSP3vsMTBESP3.pdf")
+
+
+```
+
+## Individuals as covariates
+
+```{r}
+cD <- colData(se)
+cD$Type_Processing <- paste(cD$Type, cD$Processing, sep = "_")
+cD$Individual <- stringr::str_remove(cD$Pseudonym, pattern = "_NG|_TU")
+design <- model.matrix(~ 0 + Type_Processing + Individual, data = cD)
+fit <- lmFit(object = assay(se), design = design)
+
+## create contrasts
+contrasts <- makeContrasts(
+    autoSP3 = Type_ProcessingTU_autoSP3 - Type_ProcessingNG_autoSP3,
+    MTBE_SP3 = Type_ProcessingTU_MTBE_SP3 - Type_ProcessingNG_MTBE_SP3,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+## set parameters for differential expression
+num <- Inf
+p_val <- 1
+adj <- "BH"
+
+## get the features for autoSP3
+tT_autoSP3_covariate <- topTable(fit_eB, number = num, p.value = p_val, 
+    adjust.method = adj, coef = "autoSP3")
+
+cor(x = tT_autoSP3_covariate$t[order(rownames(tT_autoSP3_covariate))],
+    y = tT_autoSP3$t[order(rownames(tT_autoSP3))], 
+    use = "pairwise.complete.obs")
+
+## get the features for MTBE_SP3
+tT_MTBE_SP3_covariate <- topTable(fit_eB, number = num, p.value = p_val, 
+    adjust.method = adj, coef = "MTBE_SP3")
+
+cor(x = tT_MTBE_SP3_covariate$t[order(rownames(tT_MTBE_SP3_covariate))],
+    y = tT_MTBE_SP3$t[order(rownames(tT_MTBE_SP3))], 
+    use = "pairwise.complete.obs")
+```
+
+

@@ -1,0 +1,1704 @@
+---
+title: "Comparison of Extraction Methods (peptides)"
+subtitle: "all tissues (cells, fresh-frozen, FFPE, plasma, serum)"
+author:
+    - Thomas Naake^[European Molecular Biology Laboratory, Meyerhofstrasse 1, 69117 Heidelberg, Germany]
+fig_width: 15
+fig_height: 10
+fontsize: 12pt
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float: TRUE
+    theme: united
+    number_sections: true
+    highlight: tango
+---
+
+```{r env, include=FALSE, echo=FALSE, cache=FALSE}
+library("knitr")
+library("ggplot2")
+library("tidyverse")
+knitr::opts_chunk$set(stop_on_error = 1L, fig.pos = "ht", dev = "png")
+suppressPackageStartupMessages(library("Biostrings"))
+suppressPackageStartupMessages(library("MatrixQCvis"))
+suppressPackageStartupMessages(library("PhysicoChemicalPropertiesProtein"))
+suppressPackageStartupMessages(library("tidyverse"))
+suppressPackageStartupMessages(library("limma"))
+suppressPackageStartupMessages(library("wesanderson"))
+knitr::opts_knit$set(root.dir = "~/GitLab/20211202_extraction_method/")
+suppressMessages(
+    devtools::source_gist("2a1bb0133ff568cbe28d", 
+        filename = "geom_flat_violin.R"))
+```
+
+
+In the following section check if there is a relation between physico-chemical
+properties and the observed differences between the extraction methods.
+
+Use here the peptide datasets.
+
+# Load the data set
+
+```{r load_data_peptide}
+setwd("~/GitLab/20211202_extraction_method/")
+
+## load cells data set
+cells <- maxQuant("peptides_cells.txt", intensity = "LFQ", type = "txt")
+cells <- assay(cells) %>% 
+    transformAssay(method = "log") %>%
+    MatrixQCvis:::updateSE(cells, assay = .)
+
+## load fresh-frozen data set
+ff <- maxQuant("peptides_freshfrozen.txt", intensity = "LFQ", type = "txt")
+ff <- assay(ff) %>% 
+    transformAssay(method = "log") %>%
+    MatrixQCvis:::updateSE(ff, assay = .)
+
+## load FFPE data set
+ffpe <- maxQuant("peptides_FFPE.txt", intensity = "LFQ", type = "txt")
+ffpe <- assay(ffpe) %>% 
+    transformAssay(method = "log") %>%
+    MatrixQCvis:::updateSE(ffpe, assay = .)
+
+## load Serum-plasma
+plasma_serum <- maxQuant("peptides_blood.txt", intensity = "LFQ", type = "txt")
+plasma_serum <- assay(plasma_serum) %>% 
+    transformAssay(method = "log") %>%
+    MatrixQCvis:::updateSE(plasma_serum, assay = .)
+```
+
+
+## Update the colData and rowData slots with the annotations
+
+```{r load_annot}
+column_keep <- c("Sample_IDs", "condition", "LFQ")
+
+## load the annotation
+annot <- openxlsx::read.xlsx("proteinGroups_overview.xlsx", 
+    sheet = "annotation", startRow = 2)
+annot <- annot[, column_keep]
+annot <- annot[!annot$condition %in% "ignore", ]
+annot <- annot[!is.na(annot$condition), ]
+
+## truncate the annotation for Cells
+annot_cells <- annot[grep(annot$condition, pattern = "Cells"), ]
+
+## truncate the annotation for Fresh-frozen
+annot_ff <- annot[grep(annot$Sample_IDs, pattern = "powder_tissue_AFA_|_T"), ]
+
+## truncate the annotation for FFPE
+annot_ffpe <- annot[grep(annot$Sample_IDs, pattern = "_FFPE"), ]
+
+## truncate the annotation for Plasma and Serum
+annot_plasma <- annot[grep(annot$condition, pattern = "Plasma"), ]
+annot_serum <- annot[grep(annot$condition, pattern = "Serum"), ]
+```
+
+
+Load the protein FASTA files and cut the sequence names.
+
+```{r biostrings, message = FALSE, echo = FALSE}
+library(Biostrings)
+hs <- readAAStringSet("2021_03_30_Uniprot_homo_sapiens_canonical - Copy.fasta")
+mm <- readAAStringSet("20190204_uniprot-mus+musculus-filtered-reviewed_yes.fasta")
+
+## for cells, ffpe, plasma, serum = human
+names_hs <- names(hs@ranges)
+names_hs <- strsplit(names_hs, split = "[|]")
+names_hs <- unlist(lapply(names_hs, "[", 2))
+hs <- data.frame(feature = names_hs, 
+    sequence = as.character(unlist(lapply(hs, as.character))))
+
+## for FF = mouse
+names_mm <- names(mm@ranges)
+names_mm <- strsplit(names_mm, split = "[|]")
+names_mm <- unlist(lapply(names_mm, "[", 2))
+mm <- data.frame(feature = names_mm, 
+    sequence = as.character(unlist(lapply(mm, as.character))))
+```
+
+## Update the colData and rowData slots with the annotations
+
+
+Write the annotations and the sequences to the `colData` and `rowData` slots.
+
+```{r update_cD_peptide}
+## cells
+annot_cells$Sample_IDs <- make.names(annot_cells$Sample_IDs)
+cells <- cells[, annot_cells$Sample_IDs]
+cD <- colData(cells) %>% as.data.frame()
+cells@colData <- left_join(cD, annot_cells, by = c("name" = "Sample_IDs")) %>%
+  DataFrame()
+
+## fresh-frozen
+annot_ff$Sample_IDs <- make.names(annot_ff$Sample_IDs)
+ff <- ff[, annot_ff$Sample_IDs]
+cD <- colData(ff) %>% as.data.frame()
+ff@colData <- left_join(cD, annot_ff, by = c("name" = "Sample_IDs")) %>%
+  DataFrame()
+
+## FFPE
+annot_ffpe$Sample_IDs <- make.names(annot_ffpe$Sample_IDs)
+ffpe <- ffpe[, annot_ffpe$Sample_IDs]
+cD <- colData(ffpe) %>% as.data.frame()
+ffpe@colData <- left_join(cD, annot_ffpe, by = c("name" = "Sample_IDs")) %>%
+  DataFrame()
+
+## Plasma
+annot_plasma$Sample_IDs <- make.names(annot_plasma$Sample_IDs)
+annot_plasma$Sample_IDs <- gsub(annot_plasma$Sample_IDs, pattern = "[.]",
+    replacement = "_")
+colnames(plasma_serum) <- gsub(colnames(plasma_serum), pattern = "[.]", 
+    replacement = "_")
+plasma_serum$name <- colnames(plasma_serum)
+plasma <- plasma_serum[, annot_plasma$Sample_IDs]
+cD <- colData(plasma) %>% as.data.frame()
+plasma@colData <- left_join(cD, annot_plasma, by = c("name" = "Sample_IDs")) %>%
+  DataFrame()
+
+## Serum
+annot_serum$Sample_IDs <- make.names(annot_serum$Sample_IDs)
+annot_serum$Sample_IDs <- gsub(annot_serum$Sample_IDs, pattern = "[.]",
+    replacement = "_")
+serum <- plasma_serum[, annot_serum$Sample_IDs]
+cD <- colData(serum) %>% as.data.frame()
+serum@colData <- left_join(cD, annot_serum, by = c("name" = "Sample_IDs")) %>%
+  DataFrame()
+
+## write the SummarizedExperiment objects to _old to retrieve them later
+cells_old <- cells; ff_old <- ff; ffpe_old <- ffpe; plasma_old <- plasma; serum_old <- serum
+```
+
+# Differential expression analysis
+
+For the differential expression analysis use in all cases the following scheme:
+
+  - create the model matrix,
+  - fit a linear model for each protein taking into account the model matrix 
+    using `lmFit` and method `"ls"`,
+  - create the contrasts between two levels as specified in each section,
+  - compute contrasts from linear model fit; given the linear model fit to the
+    data, compute estimated coefficients and standard errors for a given 
+    set of contrasts  (using `contrasts.fit`)
+  - run Empirical Bayes Statistics for differential expressino; 
+    Given a linear model fit from `lmFit`, compute moderated t-statistics, 
+    moderated F-statistic, and log-odds of differential expression by 
+    empirical Bayes moderation of the standard errors towards a global value
+    (using `eBayes`)
+
+```{r helper_fcts, message=FALSE, warning=FALSE, echo = FALSE}
+plot_violin_barplot <- function(df, x = "x", y = "y", fill = "x", 
+    comparisons = NULL, file = NULL, method = "t.test", 
+    method.args = list(method = "spearman"), paired = FALSE) {
+    
+    p <- ggplot(data = df, aes_string(x = x, y = y, fill = fill)) +
+        geom_flat_violin(position = position_nudge(x = .2, y = 0), alpha = .8,
+            scale = "count") +
+        scale_color_manual(values = as.character(wes_palette("FantasticFox1"))) +
+        scale_fill_manual(values = as.character(wes_palette("FantasticFox1"))) +
+        theme_classic() + 
+        guides(color = "none") +
+        geom_boxplot(width = .1, show.legend = FALSE, outlier.shape = NA, 
+            alpha = 0.5) +
+        xlab("") +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+    
+    ## add indications of significance
+    if (length(comparisons) > 0)
+        p <- p + ggpubr::stat_compare_means(comparisons = comparisons, 
+            paired = paired, method = method, label = "p.signif", 
+            method.args = method.args)
+    
+    if (length(file) > 0) {
+        pdf(file)
+        print(p)
+        dev.off()
+    }
+    
+    ## return the plot
+    p
+}
+```
+
+```{r parameters_DE}
+## set parameters for differential expression (num only for display)
+num <- 500
+p_val <- 1
+adj <- "BH"
+```
+
+The `*_TwoPhase_AFA` refers to `*_MTBE_SP3`, while the `*_AFA` refers to
+`*_autoSP3`.
+
+
+# Cells
+
+contrasts:
+  
+  - Cells_AFA - Cells_TwoPhase_AFA
+
+## Cells: Overlap, uniqueness of features 
+
+The plot shows the interaction of sets between different variables depending on
+their presence. The dots in the UpSet plot specify if the criteria for presence
+are fulfilled: Presence is defined by a feature being measured in at least one
+sample of a set.
+
+```{r overlap_cells, echo = FALSE}
+MatrixQCvis::upsetCategory(cells, category = "condition", measured = TRUE)
+
+pdf("upset_peptides_cells_all.pdf")
+MatrixQCvis::upsetCategory(cells, category = "condition", measured = TRUE)
+dev.off()
+
+feat_cells <- extractComb(cells, combination = c("Cells_AFA", "Cells_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+```
+
+Only continue with the shared features in the following analyses.
+
+```{r cells_feat, echo = FALSE}
+## write also the unique proteins to files
+feat <- extractComb(cells, combination = c("Cells_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_cells_Cells_AFA.txt",
+    quote = FALSE, row.names = FALSE)
+feat <- extractComb(cells, combination = c("Cells_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_cells_Cells_TwoPhase_AFA.txt",
+    quote = FALSE, row.names = FALSE)
+
+## continue only with the overlap
+feat <- extractComb(cells, combination = c("Cells_AFA", "Cells_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+cells <- cells[feat,]
+```
+
+## Cells: CV
+
+```{r cells_cv, echo = FALSE}
+cv_a <- assay(cells)[, cells$condition == "Cells_AFA"]
+cv_b <- assay(cells)[, cells$condition == "Cells_TwoPhase_AFA"]
+##partial_bundle(MatrixQCvis::cvFeaturePlot(list(Cells = cv_a, Cells_TwoPhase = cv_b)))
+
+cv_a <- MatrixQCvis::cv(t(cv_a))[[1]]
+cv_b <- MatrixQCvis::cv(t(cv_b))[[1]]
+
+## check if one of the two methods has higher means of cv
+print("mean: Cells_AFA")
+mean(cv_a, na.rm = TRUE)
+print("mean: Cells_TwoPhase_AFA")
+mean(cv_b, na.rm = TRUE)
+wilcox.test(cv_a, cv_b, paired = TRUE,)
+
+df <- data.frame(
+    rbind(
+    cbind(cv_a, "Cells_AFA"),
+    cbind(cv_b, "Cells_TwoPhase_AFA"))
+)
+colnames(df) <- c("cv", "type")
+df$cv <- as.numeric(df$cv)
+df$type <- factor(df$type, levels = c("Cells_TwoPhase_AFA", "Cells_AFA"))
+
+plot_violin_barplot(df, x = "type", y = "cv", fill = "type", 
+    comparisons = list(c("Cells_AFA", "Cells_TwoPhase_AFA")), 
+    file = "coefficient_variation_peptide_cells.pdf", method = "wilcox.test", 
+    paired = TRUE)
+```
+
+The TwoPhase method shows higher CV compared to the traditional AFA method.
+
+## Cells: Differential expression analysis
+
+```{r de_cells, echo = FALSE}
+design <- model.matrix(~ 0 + condition, data = colData(cells))
+colnames(design) <- make.names(colnames(design))
+fit <- lmFit(object = assay(cells), design = design, method = "ls")
+
+## create contrasts
+contrasts <- makeContrasts(
+    AFAvsTwoPhaseAFA = conditionCells_AFA - conditionCells_TwoPhase_AFA,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+## contrast: Cells_AFA - Cells_TwoPhase_AFA
+tT <- topTable(fit_eB, number = Inf, p.value = p_val, adjust.method = adj,
+    coef = "AFAvsTwoPhaseAFA")
+tT <- tT[feat, ]
+write.table(tT, file = "peptides_de_cells_Cells_AFA_vs_Cells_Two_Phase_AFA.txt", sep = "\t", quote = FALSE)
+rmarkdown::paged_table(tT, options = list(max.print = num))
+tT <- cbind(name = rownames(tT), tT)
+##partial_bundle(volcanoPlot(tT))
+```
+
+## Cells: Association to physico-chemical parameters
+
+Take the t-values and plot against the GRAVY-Score and Isoelectric point 
+(for shared features).
+
+```{r cells_phyc_paramterers, echo = FALSE}
+t <- tT[, "t"]
+
+## GRAVY score
+rD <- rowData(cells)
+gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(aa))
+gravy <- unlist(gravy)
+df <- data.frame(gravy = gravy, t = t)
+ggplot(df, aes(x = gravy, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(gravy, t, method = "spearman")
+
+## isoelectric point
+iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(aa, method = "IPC_protein"))
+iep <- unlist(iep)
+df <- data.frame(iep = iep, t = t)
+ggplot(df, aes(x = iep, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(iep, t, method = "spearman")
+```
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_cells}
+## gravy
+feat <- read.table(file = "peptides_unique_features_cells_Cells_AFA.txt", 
+    header = TRUE)
+gravy_other <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "peptides_unique_features_cells_Cells_TwoPhase_AFA.txt",
+    header = TRUE)
+gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "other"),
+    cbind(unlist(gravy_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_gravy_cells.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "peptides_unique_features_cells_Cells_AFA.txt", 
+    header = TRUE)
+iep_other <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "peptides_unique_features_cells_Cells_TwoPhase_AFA.txt",
+    header = TRUE)
+iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "other"),
+    cbind(unlist(iep_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_iep_cells.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+
+# Fresh-frozen
+
+contrasts: 
+
+  - powder_AFA - powder_TwoPhase_AFA (contrast 1)
+  - Tissue_bulk_AFA - powder_Two_Phase_AFA (contrast 2)
+
+Upset plot for all condition types.
+
+```{r overlap_ff_all, echo = FALSE}
+MatrixQCvis::upsetCategory(ff, category = "condition", measured = TRUE)
+
+pdf("upset_peptides_ff_all.pdf")
+MatrixQCvis::upsetCategory(ff, category = "condition", measured = TRUE)
+dev.off()
+
+feat_ff <- extractComb(ff, 
+    combination = c("powder_AFA", "powder_TwoPhase_AFA", "Tissue_bulk_AFA"), 
+    measured = TRUE, category = "condition")
+```
+
+
+## Fresh-frozen: Overlap, uniqueness of features (contrast 1)
+
+The plot shows the interaction of sets between different variables depending on
+their presence. The dots in the UpSet plot specify if the criteria for presence
+are fulfilled: Presence is defined by a feature being measured in at least one
+sample of a set.
+
+```{r overlap_ff_1, echo = FALSE}
+ff_1 <- ff[, ff$condition %in% c("powder_AFA", "powder_TwoPhase_AFA")]
+MatrixQCvis::upsetCategory(ff_1, category = "condition", measured = TRUE)
+```
+
+Only continue with the shared features in the following analyses.
+
+```{r ff_1_feat, eval = TRUE, echo = FALSE}
+ ## write also the unique proteins to files
+feat <- extractComb(ff_1, combination = c("powder_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_ff_contrast1_powder.txt",
+    quote = FALSE, row.names = FALSE)
+feat <- extractComb(ff_1, combination = c("powder_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_ff_contrast1_powder_TwoPhase.txt",
+    quote = FALSE, row.names = FALSE)
+
+## continue only with the overlap
+feat <- extractComb(ff_1, combination = c("powder_AFA", "powder_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+ff_1 <- ff_1[feat,]
+```
+
+
+## Fresh-frozen: CV (contrast 1)
+
+```{r ff_1_cv, eval = TRUE, echo = FALSE}
+cv_a <- assay(ff_1)[, ff_1$condition == "powder_AFA"]
+cv_b <- assay(ff_1)[, ff_1$condition == "powder_TwoPhase_AFA"]
+##partial_bundle(MatrixQCvis::cvFeaturePlot(list(powder_AFA = cv_a, powder_TwoPhase_AFA = cv_b)))
+
+cv_a <- MatrixQCvis::cv(t(cv_a))[[1]]
+cv_b <- MatrixQCvis::cv(t(cv_b))[[1]]
+
+## check if one of the two methods has higher means of cv
+print("mean: powder_AFA")
+mean(cv_a, na.rm = TRUE)
+print("mean: powder_TwoPhase_AFA")
+mean(cv_b, na.rm = TRUE)
+wilcox.test(cv_a, cv_b, paired = TRUE)
+
+df <- data.frame(
+    rbind(
+    cbind(cv_a, "powder_AFA"),
+    cbind(cv_b, "powder_TwoPhase_AFA"))
+)
+colnames(df) <- c("cv", "type")
+df$cv <- as.numeric(df$cv)
+df$type <- factor(df$type, levels = c("powder_AFA", "powder_TwoPhase_AFA"))
+
+plot_violin_barplot(df, x = "type", y = "cv", fill = "type", 
+    comparisons = list(c("powder_AFA", "powder_TwoPhase_AFA")), 
+    file = "coefficient_variation_peptide_freshfrozen_1.pdf", 
+    method = "wilcox.test", paired = TRUE)
+```
+
+## Fresh-frozen: Differential expression analysis (contrast 1)
+
+```{r de_ff_1, echo = FALSE, eval = TRUE}
+design <- model.matrix(~ 0 + condition, data = colData(ff))
+colnames(design) <- make.names(colnames(design))
+fit <- lmFit(object = assay(ff), design = design, method = "ls")
+
+## create contrasts
+contrasts <- makeContrasts(
+    powderAFAvsPowderTwoPhaseAFA = 
+        conditionpowder_AFA - conditionpowder_TwoPhase_AFA,
+    TissueBulkAFAvsPowderTwoPhaseAFA = 
+        conditionTissue_bulk_AFA - conditionpowder_TwoPhase_AFA,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+print("## contrast: powder_AFA - powder_TwoPhase_AFA")
+tT <- topTable(fit_eB, number = Inf, p.value = p_val, adjust.method = adj,
+    coef = "powderAFAvsPowderTwoPhaseAFA")
+tT <- tT[feat, ]
+write.table(tT, file = "peptides_de_FF_contrast1_powder_AFA_vs_powder_TwoPhase_AFA.txt", sep = "\t", quote = FALSE)
+rmarkdown::paged_table(tT, options = list(max.print = num))
+tT <- cbind(name = rownames(tT), tT)
+##partial_bundle(volcanoPlot(tT))
+```
+
+
+## Fresh-frozen: Association to physico-chemical parameters (contrast 1)
+
+Take the t-values and plot against the GRAVY-Score and Isoelectric point (for shared features).
+
+```{r ff_1_phyco, echo = FALSE, eval = TRUE}
+t <- tT[, "t"]
+
+## GRAVY score
+rD <- rowData(ff)
+gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(aa))
+gravy <- unlist(gravy)
+df <- data.frame(gravy = gravy, t = t)
+ggplot(df, aes(x = gravy, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(gravy, t, method = "spearman")
+
+## isoelectric point
+iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(aa, method = "IPC_protein"))
+iep <- unlist(iep)
+df <- data.frame(iep = iep, t = t)
+ggplot(df, aes(x = iep, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(iep, t, method = "spearman")
+```
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_ff1}
+## gravy
+feat <- read.table(file = "peptides_unique_features_ff_contrast1_powder.txt", 
+    header = TRUE)
+gravy_other <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "peptides_unique_features_ff_contrast1_powder_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "other"),
+    cbind(unlist(gravy_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_gravy_freshfrozen_1.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "peptides_unique_features_ff_contrast1_powder.txt", 
+    header = TRUE)
+iep_other <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "peptides_unique_features_ff_contrast1_powder_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "other"),
+    cbind(unlist(iep_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_iep_freshfrozen_1.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+## Fresh-frozen: Overlap, uniqueness of features (contrast 2)
+
+The plot shows the interaction of sets between different variables depending on
+their presence. The dots in the UpSet plot specify if the criteria for presence
+are fulfilled: Presence is defined by a feature being measured in at least one
+sample of a set.
+
+```{r ff_2_overlap, eval = TRUE, echo = FALSE}
+ff_2 <- ff[, ff$condition %in% c("Tissue_bulk_AFA", "powder_TwoPhase_AFA")]
+MatrixQCvis::upsetCategory(ff_2, category = "condition", measured = TRUE)
+```
+
+Only continue with the shared features in the following analyses.
+
+```{r ff_2_feat, eval = TRUE, echo = FALSE}
+## write also the unique proteins to files
+feat <- extractComb(ff_2, combination = c("Tissue_bulk_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_ff_contrast2_Tissue_bulk.txt",
+    quote = FALSE, row.names = FALSE)
+feat <- extractComb(ff_2, combination = c("powder_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_ff_contrast2_powder_TwoPhase.txt",
+    quote = FALSE, row.names = FALSE)
+
+feat <- extractComb(ff_2, 
+    combination = c("Tissue_bulk_AFA", "powder_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+ff_2 <- ff_2[feat,]
+```
+
+## Fresh-frozen: CV (contrast 2)
+
+```{r ff_2_cv, eval = TRUE, echo = FALSE}
+cv_a <- assay(ff_2)[, ff_2$condition == "Tissue_bulk_AFA"]
+cv_b <- assay(ff_2)[, ff_2$condition == "powder_TwoPhase_AFA"]
+##partial_bundle(MatrixQCvis::cvFeaturePlot(list(Tissue_bulk = cv_a, powder_TwoPhase = cv_b)))
+cv_a <- MatrixQCvis::cv(t(cv_a))[[1]]
+cv_b <- MatrixQCvis::cv(t(cv_b))[[1]]
+
+## check if one of the two methods has higher means of cv
+print("mean: Tissue_bulk_AFA")
+mean(cv_a, na.rm = TRUE)
+print("mean: powder_TwoPhase_AFA")
+mean(cv_b, na.rm = TRUE)
+wilcox.test(cv_a, cv_b, paired = TRUE)
+
+df <- data.frame(
+    rbind(
+    cbind(cv_a, "Tissue_bulk_AFA"),
+    cbind(cv_b, "powder_TwoPhase_AFA"))
+)
+colnames(df) <- c("cv", "type")
+df$cv <- as.numeric(df$cv)
+df$type <- factor(df$type, levels = c("powder_TwoPhase_AFA", "Tissue_bulk_AFA"))
+
+plot_violin_barplot(df, x = "type", y = "cv", fill = "type", 
+    comparisons = list(c("Tissue_bulk_AFA", "powder_TwoPhase_AFA")), 
+    file = "coefficient_variation_peptide_freshfrozen_2.pdf", 
+    method = "wilcox.test", paired = TRUE)
+```
+
+## Fresh-frozen: Differential expression analysis (contrast 2)
+
+```{r de_ff_2, eval = TRUE, echo = FALSE}
+print("## contrast: Tissue_bulk_AFA - powder_TwoPhase_AFA")
+tT <- topTable(fit_eB, number = Inf, p.value = p_val, adjust.method = adj,
+    coef = "TissueBulkAFAvsPowderTwoPhaseAFA")
+tT <- tT[feat, ]
+write.table(tT, file = "peptides_de_FF_contrast2_Tissue_bulk_AFA_vs_powder_TwoPhase_AFA.txt", sep = "\t", quote = FALSE)
+rmarkdown::paged_table(tT, options = list(max.print = num))
+tT <- cbind(name = rownames(tT), tT)
+##partial_bundle(volcanoPlot(tT))
+```
+
+## Fresh-frozen: Association to physico-chemical parameters (contrast 2)
+
+Take the t-values and plot against the GRAVY-Score and Isoelectric point (for shared features).
+
+```{r ff_phyco_parameters, echo = FALSE, eval = TRUE}
+t <- tT[, "t"]
+
+## GRAVY score
+rD <- rowData(ff)
+gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(aa))
+gravy <- unlist(gravy)
+df <- data.frame(gravy = gravy, t = t)
+ggplot(df, aes(x = gravy, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(gravy, t, method = "spearman")
+
+## isoelectric point
+iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(aa, method = "IPC_protein"))
+iep <- unlist(iep)
+df <- data.frame(iep = iep, t = t)
+ggplot(df, aes(x = iep, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(iep, t, method = "spearman")
+```
+
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_ff2}
+## gravy
+feat <- read.table(file = "peptides_unique_features_ff_contrast2_Tissue_bulk.txt", 
+    header = TRUE)
+gravy_other <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "peptides_unique_features_ff_contrast2_powder_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "other"),
+    cbind(unlist(gravy_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_gravy_freshfrozen_2.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "peptides_unique_features_ff_contrast2_Tissue_bulk.txt", 
+    header = TRUE)
+iep_other <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "peptides_unique_features_ff_contrast2_powder_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "other"),
+    cbind(unlist(iep_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_iep_freshfrozen_2.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+
+# FFPE
+
+contrasts:
+
+  - powder_AFA - powder_TwoPhase_AFA (contrast 1)
+  - FFPE_AFA - powder_TwoPhase_AFA (contrast 2)
+  
+Upset plot for all condition types.
+
+```{r overlap_ffpe_all, echo = F}
+MatrixQCvis::upsetCategory(ffpe, category = "condition", measured = TRUE)
+
+pdf("upset_peptides_ffpe_all.pdf")
+MatrixQCvis::upsetCategory(ffpe, category = "condition", measured = TRUE)
+dev.off()
+
+feat_ffpe <- extractComb(ffpe, 
+    combination = c("powder_AFA", "powder_TwoPhase_AFA", "FFPE_AFA"), 
+    measured = TRUE, category = "condition")
+```
+
+## FFPE: Overlap, uniqueness of features (contrast 1)
+
+
+The plot shows the interaction of sets between different variables depending on
+their presence. The dots in the UpSet plot specify if the criteria for presence
+are fulfilled: Presence is defined by a feature being measured in at least one
+sample of a set.
+
+```{r overlap_ffpe_1, eval = TRUE, echo = FALSE}
+ffpe_1 <- ffpe[, ffpe$condition %in% c("powder_AFA", "powder_TwoPhase_AFA")]
+MatrixQCvis::upsetCategory(ffpe_1, category = "condition", measured = TRUE)
+```
+
+Only continue with the shared features in the following analyses.
+
+```{r ffpe_1_feat, echo = FALSE}
+## write also the unique proteins to files
+feat <- extractComb(ffpe_1, combination = c("powder_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_ffpe_contrast1_powder.txt",
+    quote = FALSE, row.names = FALSE)
+feat <- extractComb(ffpe_1, combination = c("powder_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_ffpe_contrast1_TwoPhase.txt",
+    quote = FALSE, row.names = FALSE)
+
+## continue only with the overlap
+feat <- extractComb(ffpe_1, combination = c("powder_AFA", "powder_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+ffpe_1 <- ffpe_1[feat,]
+```
+
+## FFPE: CV (contrast 1)
+
+```{r ffpe_1_cv, echo = FALSE}
+cv_a <- assay(ffpe_1)[, ffpe_1$condition == "powder_AFA"]
+cv_b <- assay(ffpe_1)[, ffpe_1$condition == "powder_TwoPhase_AFA"]
+##partial_bundle(MatrixQCvis::cvFeaturePlot(list(powder_AFA = cv_a, powder_TwoPhase_AFA = cv_b)))
+cv_a <- MatrixQCvis::cv(t(cv_a))[[1]]
+cv_b <- MatrixQCvis::cv(t(cv_b))[[1]]
+
+## check if one of the two methods has higher means of cv
+print("mean: powder_AFA")
+mean(cv_a, na.rm = TRUE)
+print("mean: powder_TwoPhase_AFA")
+mean(cv_b, na.rm = TRUE)
+wilcox.test(cv_a, cv_b, paired = TRUE)
+
+df <- data.frame(
+    rbind(
+    cbind(cv_a, "powder_AFA"),
+    cbind(cv_b, "powder_TwoPhase_AFA"))
+)
+colnames(df) <- c("cv", "type")
+df$cv <- as.numeric(df$cv)
+df$type <- factor(df$type, levels = c("powder_TwoPhase_AFA", "powder_AFA"))
+
+plot_violin_barplot(df, x = "type", y = "cv", fill = "type", 
+    comparisons = list(c("powder_AFA", "powder_TwoPhase_AFA")), 
+    file = "coefficient_variation_peptide_FFPE_1.pdf", method = "wilcox.test", 
+    paired = TRUE)
+```
+
+
+## FFPE: Differential expression analysis (contrast 1)
+
+```{r de_ffpe_1, echo = FALSE}
+design <- model.matrix(~ 0 + condition, data = colData(ffpe))
+colnames(design) <- make.names(colnames(design))
+fit <- lmFit(object = assay(ffpe), design = design, method = "ls")
+
+## create contrasts
+contrasts <- makeContrasts(
+    powderAFAvsPowderTwoPhaseAFA = 
+        conditionpowder_AFA - conditionpowder_TwoPhase_AFA,
+    ffpeAFAvsPowderTwoPhaseAFA = 
+        conditionFFPE_AFA - conditionpowder_TwoPhase_AFA,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+print("## contrast: powder_AFA - powder_TwoPhase_AFA")
+tT <- topTable(fit_eB, number = Inf, p.value = p_val, adjust.method = adj,
+    coef = "powderAFAvsPowderTwoPhaseAFA")
+tT <- tT[feat, ]
+write.table(tT, file = "peptides_de_FFPE_contrast1_powder_AFA_vs_powder_TwoPhase_AFA.txt", sep = "\t", quote = FALSE)
+rmarkdown::paged_table(tT, options = list(max.print = num))
+tT <- cbind(name = rownames(tT), tT)
+##partial_bundle(volcanoPlot(tT))
+```
+
+## FFPE: Association to physico-chemical parameters (contrast 1)
+
+Take the t-values and plot against the GRAVY-Score and Isoelectric point (for shared features).
+
+```{r ffpe_1_phyco, echo = FALSE}
+t <- tT[, "t"]
+
+## GRAVY score
+rD <- rowData(ffpe)
+gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(aa))
+gravy <- unlist(gravy)
+df <- data.frame(gravy = gravy, t = t)
+ggplot(df, aes(x = gravy, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(gravy, t, method = "spearman")
+
+## isoelectric point
+iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(aa, method = "IPC_protein"))
+iep <- unlist(iep)
+df <- data.frame(iep = iep, t = t)
+ggplot(df, aes(x = iep, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(iep, t, method = "spearman")
+```
+
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_ffpe1}
+## gravy
+feat <- read.table(file = "peptides_unique_features_ffpe_contrast1_powder.txt", 
+    header = TRUE)
+gravy_other <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "peptides_unique_features_ffpe_contrast1_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "other"),
+    cbind(unlist(gravy_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_gravy_FFPE_1.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "peptides_unique_features_ffpe_contrast1_powder.txt", 
+    header = TRUE)
+iep_other <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "peptides_unique_features_ffpe_contrast1_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "other"),
+    cbind(unlist(iep_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_iep_FFPE_1.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+
+## FFPE: Overlap, uniqueness of features (contrast 2)
+
+The plot shows the interaction of sets between different variables depending on
+their presence. The dots in the UpSet plot specify if the criteria for presence
+are fulfilled: Presence is defined by a feature being measured in at least one
+sample of a set.
+
+```{r overlap_ffpe_2, echo = FALSE}
+ffpe_2 <- ffpe[, ffpe$condition %in% c("FFPE_AFA", "powder_TwoPhase_AFA")]
+MatrixQCvis::upsetCategory(ffpe_2, category = "condition", measured = TRUE)
+```
+
+Only continue with the shared features in the following analyses.
+
+```{r ffpe_2_feat, echo = FALSE}
+## write also the unique proteins to files
+feat <- extractComb(ffpe_2, combination = c("FFPE_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_ffpe_contrast2_FFPE.txt",
+    quote = FALSE, row.names = FALSE)
+feat <- extractComb(ffpe_2, combination = c("powder_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_ffpe_contrast2_powder_TwoPhase.txt",
+    quote = FALSE, row.names = FALSE)
+
+## continue only with the overlap
+feat <- extractComb(ffpe_2, combination = c("FFPE_AFA", "powder_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+ffpe_2 <- ffpe_2[feat,]
+```
+
+
+## FFPE: CV (contrast 2)
+
+```{r ffpe_2_cv, echo = FALSE}
+cv_a <- assay(ffpe_2)[, ffpe_2$condition == "FFPE_AFA"]
+cv_b <- assay(ffpe_2)[, ffpe_2$condition == "powder_TwoPhase_AFA"]
+##partial_bundle(MatrixQCvis::cvFeaturePlot(list(powder_AFA = cv_a, powder_TwoPhase_AFA = cv_b)))
+cv_a <- MatrixQCvis::cv(t(cv_a))[[1]]
+cv_b <- MatrixQCvis::cv(t(cv_b))[[1]]
+
+## check if one of the two methods has higher means of cv
+print("mean: FFPE_AFA")
+mean(cv_a, na.rm = TRUE)
+print("mean: powder_TwoPhase_AFA")
+mean(cv_b, na.rm = TRUE)
+wilcox.test(cv_a, cv_b, paired = TRUE)
+
+## plot
+df <- data.frame(
+    rbind(
+    cbind(cv_a, "powder_AFA"),
+    cbind(cv_b, "powder_TwoPhase_AFA"))
+)
+colnames(df) <- c("cv", "type")
+df$cv <- as.numeric(df$cv)
+df$type <- factor(df$type, levels = c("powder_TwoPhase_AFA", "powder_AFA"))
+
+plot_violin_barplot(df, x = "type", y = "cv", fill = "type", 
+    comparisons = list(c("powder_AFA", "powder_TwoPhase_AFA")), 
+    file = "coefficient_variation_peptide_FFPE_2.pdf", method = "wilcox.test", 
+    paired = TRUE)
+```
+
+
+## FFPE: Differential expression analysis (contrast 2)
+
+```{r de_ffpe_2, echo = FALSE}
+print("## contrast: FFPE_AFA - powder_TwoPhase_AFA")
+tT <- topTable(fit_eB, number = Inf, p.value = p_val, adjust.method = adj,
+    coef = "ffpeAFAvsPowderTwoPhaseAFA")
+tT <- tT[feat, ]
+write.table(tT, file = "peptides_de_FFPE_contrast2_FFPE_AFA_vs_powder_TwoPhase_AFA.txt", sep = "\t", quote = FALSE)
+rmarkdown::paged_table(tT, options = list(max.print = num))
+tT <- cbind(name = rownames(tT), tT)
+##partial_bundle(volcanoPlot(tT))
+```
+
+
+## FFPE: Association to physico-chemical parameters (contrast 2)
+
+Take the t-values and plot against the GRAVY-Score and Isoelectric point (for shared features).
+
+```{r ffpe_2_phyco, echo = FALSE}
+t <- tT[, "t"]
+
+## GRAVY score
+rD <- rowData(ffpe)
+gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(aa))
+gravy <- unlist(gravy)
+df <- data.frame(gravy = gravy, t = t)
+ggplot(df, aes(x = gravy, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(gravy, t, method = "spearman")
+
+## isoelectric point
+iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(aa, method = "IPC_protein"))
+iep <- unlist(iep)
+df <- data.frame(iep = iep, t = t)
+ggplot(df, aes(x = iep, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(iep, t, method = "spearman")
+```
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_ffpe2}
+## gravy
+feat <- read.table(file = "peptides_unique_features_ffpe_contrast2_FFPE.txt", 
+    header = TRUE)
+gravy_other <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "peptides_unique_features_ffpe_contrast2_powder_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "other"),
+    cbind(unlist(gravy_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_gravy_FFPE_2.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "peptides_unique_features_ffpe_contrast2_FFPE.txt", 
+    header = TRUE)
+iep_other <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "peptides_unique_features_ffpe_contrast2_powder_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "other"),
+    cbind(unlist(iep_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_iep_FFPE_2.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+# Plasma
+
+contrasts:
+
+  - Plasma_AFA - Plasma_TwoPhase_AFA
+
+Upset plot for all condition types.
+
+```{r overlap_plasma_all, echo = FALSE}
+MatrixQCvis::upsetCategory(plasma, category = "condition", measured = TRUE)
+
+pdf("upset_peptides_cplasma_all.pdf")
+MatrixQCvis::upsetCategory(plasma, category = "condition", measured = TRUE)
+dev.off()
+```
+  
+
+## Plasma: Overlap, uniqueness of features
+
+
+The plot shows the interaction of sets between different variables depending on
+their presence. The dots in the UpSet plot specify if the criteria for presence
+are fulfilled: Presence is defined by a feature being measured in at least one
+sample of a set.
+
+```{r overlap_plasma, echo = FALSE}
+plasma <- plasma[, plasma$condition %in% c("Plasma_AFA", "Plasma_TwoPhase_AFA")]
+feat_plasma <- extractComb(plasma,
+    combination = c("Plasma_AFA", "Plasma_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+MatrixQCvis::upsetCategory(plasma, category = "condition", measured = TRUE)
+```
+
+Only continue with the shared features in the following analyses.
+
+```{r plasma_feat, echo = FALSE}
+## write also the unique proteins to files
+feat <- extractComb(plasma, combination = c("Plasma_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_plasma_Plasma_AFA.txt",
+    quote = FALSE, row.names = FALSE)
+feat <- extractComb(plasma, combination = c("Plasma_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_plasma_Plasma_TwoPhase.txt",
+    quote = FALSE, row.names = FALSE)
+
+## continue only with the overlap
+feat <- extractComb(plasma, combination = c("Plasma_AFA", "Plasma_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+plasma <- plasma[feat,]
+```
+
+
+## Plasma: CV
+
+```{r plasma_cv, echo = FALSE}
+cv_a <- assay(plasma)[, plasma$condition == "Plasma_AFA"]
+cv_b <- assay(plasma)[, plasma$condition == "Plasma_TwoPhase_AFA"]
+##partial_bundle(MatrixQCvis::cvFeaturePlot(list(Plasma_AFA = cv_a, Plasma_TwoPhase_AFA = cv_b)))
+cv_a <- MatrixQCvis::cv(t(cv_a))[[1]]
+cv_b <- MatrixQCvis::cv(t(cv_b))[[1]]
+
+## check if one of the two methods has higher means of cv
+print("mean: Plasma_AFA")
+mean(cv_a, na.rm = TRUE)
+print("mean: Plasma_TwoPhase_AFA")
+mean(cv_b, na.rm = TRUE)
+wilcox.test(cv_a, cv_b, paired = TRUE)
+
+## plot
+df <- data.frame(
+    rbind(
+    cbind(cv_a, "Plasma_AFA"),
+    cbind(cv_b, "Plasma_TwoPhase_AFA"))
+)
+colnames(df) <- c("cv", "type")
+df$cv <- as.numeric(df$cv)
+df$type <- factor(df$type, levels = c("Plasma_TwoPhase_AFA", "Plasma_AFA"))
+
+plot_violin_barplot(df, x = "type", y = "cv", fill = "type", 
+    comparisons = list(c("Plasma_AFA", "Plasma_TwoPhase_AFA")), 
+    file = "coefficient_variation_peptide_plasma.pdf", method = "wilcox.test", 
+    paired = TRUE)
+```
+
+
+## Plasma: Differential expression analysis 
+
+```{r de_plasma, echo = FALSE}
+design <- model.matrix(~ 0 + condition, data = colData(plasma))
+colnames(design) <- make.names(colnames(design))
+fit <- lmFit(object = assay(plasma), design = design, method = "ls")
+
+## create contrasts
+contrasts <- makeContrasts(
+    AFAvsTwoPhaseAFA = conditionPlasma_AFA - conditionPlasma_TwoPhase_AFA,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+print("## contrast: plasma_AFA - plasma_TwoPhase_AFA")
+tT <- topTable(fit_eB, number = Inf, p.value = p_val, adjust.method = adj,
+    coef = "AFAvsTwoPhaseAFA")
+tT <- tT[feat, ]
+write.table(tT, file = "peptides_de_Plasma_plasma_AFA_vs_plasma_TwoPhase_AFA.txt", sep = "\t", quote = FALSE)
+rmarkdown::paged_table(tT, options = list(max.print = num))
+tT <- cbind(name = rownames(tT), tT)
+##partial_bundle(volcanoPlot(tT))
+```
+
+## Plasma: Association to physico-chemical parameters
+
+Take the t-values and plot against the GRAVY-Score and Isoelectric point (for shared features)..
+
+```{r plasma_phyco, echo = FALSE}
+t <- tT[, "t"]
+
+## GRAVY score
+rD <- rowData(plasma)
+gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(aa))
+gravy <- unlist(gravy)
+df <- data.frame(gravy = gravy, t = t)
+ggplot(df, aes(x = gravy, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(gravy, t, method = "spearman")
+
+## isoelectric point
+iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(aa, method = "IPC_protein"))
+iep <- unlist(iep)
+df <- data.frame(iep = iep, t = t)
+ggplot(df, aes(x = iep, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(iep, t, method = "spearman")
+```
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_plasma}
+## gravy
+feat <- read.table(file = "peptides_unique_features_plasma_Plasma_AFA.txt", 
+    header = TRUE)
+gravy_other <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "peptides_unique_features_plasma_Plasma_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "other"),
+    cbind(unlist(gravy_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_gravy_plasma.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "peptides_unique_features_plasma_Plasma_AFA.txt", 
+    header = TRUE)
+iep_other <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "peptides_unique_features_plasma_Plasma_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "other"),
+    cbind(unlist(iep_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_iep_plasma.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+# Serum
+
+contrasts:
+
+  - Serum_AFA - Serum_TwoPhase_AFA
+
+Upset plot for all condition types.
+
+```{r overlap_serum_all, echo = FALSE}
+MatrixQCvis::upsetCategory(serum, category = "condition", measured = TRUE)
+
+pdf("upset_peptides_serum_all.pdf")
+MatrixQCvis::upsetCategory(serum, category = "condition", measured = TRUE)
+dev.off()
+```
+ 
+
+## Serum: Overlap, uniqueness of features
+
+The plot shows the interaction of sets between different variables depending on
+their presence. The dots in the UpSet plot specify if the criteria for presence
+are fulfilled: Presence is defined by a feature being measured in at least one
+sample of a set.
+
+```{r overlap_serum, echo = FALSE}
+serum <- serum[, serum$condition %in% c("Serum_AFA", "Serum_TwoPhase_AFA")]
+feat_serum <- extractComb(serum,
+    combination = c("Serum_AFA", "Serum_TwoPhase_AFA"),
+    measured = TRUE, category = "condition")
+MatrixQCvis::upsetCategory(serum, category = "condition", measured = TRUE)
+```
+
+Only continue with the shared features in the following analyses.
+
+```{r serum_feat, echo = FALSE}
+## write also the unique proteins to files
+feat <- extractComb(serum, combination = c("Serum_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_serum_Serum_AFA.txt",
+    quote = FALSE, row.names = FALSE)
+feat <- extractComb(serum, combination = c("Serum_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+write.table(feat, file = "peptides_unique_features_serum_Serum_TwoPhase.txt",
+    quote = FALSE, row.names = FALSE)
+
+## continue only with the overlap
+feat <- extractComb(serum, combination = c("Serum_AFA", "Serum_TwoPhase_AFA"), 
+    measured = TRUE, category = "condition")
+serum <- serum[feat,]
+```
+
+## Serum: CV
+
+```{r serum_cv, echo = FALSE}
+cv_a <- assay(serum)[, serum$condition == "Serum_AFA"]
+cv_b <- assay(serum)[, serum$condition == "Serum_TwoPhase_AFA"]
+##partial_bundle(MatrixQCvis::cvFeaturePlot(list(Serum_AFA = cv_a, Serum_TwoPhase_AFA = cv_b)))
+cv_a <- MatrixQCvis::cv(t(cv_a))[[1]]
+cv_b <- MatrixQCvis::cv(t(cv_b))[[1]]
+
+## check if one of the two methods has higher means of cv
+print("mean: Serum_AFA")
+mean(cv_a, na.rm = TRUE)
+print("mean: Serum_TwoPhase_AFA")
+mean(cv_b, na.rm = TRUE)
+wilcox.test(cv_a, cv_b, paired = TRUE)
+
+## plot
+df <- data.frame(
+    rbind(
+    cbind(cv_a, "Serum_AFA"),
+    cbind(cv_b, "Serum_TwoPhase_AFA"))
+)
+colnames(df) <- c("cv", "type")
+df$cv <- as.numeric(df$cv)
+df$type <- factor(df$type, levels = c("Serum_TwoPhase_AFA", "Serum_AFA"))
+
+plot_violin_barplot(df, x = "type", y = "cv", fill = "type", 
+    comparisons = list(c("Serum_AFA", "Serum_TwoPhase_AFA")), 
+    file = "coefficient_variation_peptide_serum.pdf", method = "wilcox.test", 
+    paired = TRUE)
+```
+
+## Serum: Differential expression analysis 
+
+```{r de_serum, echo = FALSE}
+design <- model.matrix(~ 0 + condition, data = colData(serum))
+colnames(design) <- make.names(colnames(design))
+fit <- lmFit(object = assay(serum), design = design, method = "ls")
+
+## create contrasts
+contrasts <- makeContrasts(
+    AFAvsTwoPhaseAFA = conditionSerum_AFA - conditionSerum_TwoPhase_AFA,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+print("## contrast: Serum_AFA - Serum_TwoPhase_AFA")
+tT <- topTable(fit_eB, number = Inf, p.value = p_val, adjust.method = adj,
+    coef = "AFAvsTwoPhaseAFA")
+tT <- tT[feat, ]
+write.table(tT, file = "peptides_de_Serum_Serum_AFA_vs_Serum_TwoPhase_AFA.txt", sep = "\t", quote = FALSE)
+rmarkdown::paged_table(tT, options = list(max.print = num))
+tT <- cbind(name = rownames(tT), tT)
+##partial_bundle(volcanoPlot(tT))
+```
+
+## Serum: Association to physico-chemical parameters
+
+Take the t-values and plot against the GRAVY-Score and Isoelectric point (for shared features).
+
+```{r, echo = FALSE}
+t <- tT[, "t"]
+
+## GRAVY score
+rD <- rowData(serum)
+gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(AAString(aa)))
+gravy <- unlist(gravy)
+df <- data.frame(gravy = gravy, t = t)
+ggplot(df, aes(x = gravy, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(gravy, t, method = "spearman")
+
+## isoelectric point
+iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(AAString(aa), method = "IPC_protein"))
+iep <- unlist(iep)
+df <- data.frame(iep = iep, t = t)
+ggplot(df, aes(x = iep, y = t)) + 
+    geom_point(alpha = 0.3) + 
+    geom_smooth(method = lm, se = FALSE) +
+    ggpubr::stat_cor(method = "spearman") +
+    theme_classic()
+cor.test(iep, t, method = "spearman")
+```
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_serum}
+## gravy
+feat <- read.table(file = "peptides_unique_features_serum_Serum_AFA.txt", 
+    header = TRUE)
+gravy_other <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "peptides_unique_features_serum_Serum_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "other"),
+    cbind(unlist(gravy_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_gravy_serum.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "peptides_unique_features_serum_Serum_AFA.txt", 
+    header = TRUE)
+iep_other <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "peptides_unique_features_serum_Serum_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "other"),
+    cbind(unlist(iep_tp), "two phase")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
+comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "peptide_violin_iep_serum.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+
+# CV plot for all conditions
+
+```{r cv_all_conditions}
+cv_cells_a <- assay(cells)[feat_cells, cells$condition == "Cells_AFA"]
+cv_cells_b <- assay(cells)[feat_cells, cells$condition == "Cells_TwoPhase_AFA"]
+cv_ff_a <- assay(ff)[feat_ff, ff$condition == "powder_AFA"]
+cv_ff_b <- assay(ff)[feat_ff, ff$condition == "powder_TwoPhase_AFA"]
+cv_ff_c <- assay(ff)[feat_ff, ff$condition == "Tissue_bulk_AFA"]
+cv_ffpe_a <- assay(ffpe)[feat_ffpe, ffpe$condition == "powder_AFA"]
+cv_ffpe_b <- assay(ffpe)[feat_ffpe, ffpe$condition == "powder_TwoPhase_AFA"]
+cv_ffpe_c <- assay(ffpe)[feat_ffpe, ffpe$condition == "FFPE_AFA"]
+cv_plasma_a <- assay(plasma)[feat_plasma, plasma$condition == "Plasma_TwoPhase_AFA"]
+cv_plasma_b <- assay(plasma)[feat_plasma, plasma$condition == "Plasma_AFA"]
+cv_serum_a <- assay(serum)[feat_serum, serum$condition == "Serum_TwoPhase_AFA"]
+cv_serum_b <- assay(serum)[feat_serum, serum$condition == "Serum_AFA"]
+
+## calculate cvs
+cv_cells_a <- MatrixQCvis::cv(t(cv_cells_a))[[1]]
+cv_cells_b <- MatrixQCvis::cv(t(cv_cells_b))[[1]]
+cv_ff_a <- MatrixQCvis::cv(t(cv_ff_a))[[1]]
+cv_ff_b <- MatrixQCvis::cv(t(cv_ff_b))[[1]]
+cv_ff_c <- MatrixQCvis::cv(t(cv_ff_c))[[1]]
+cv_ffpe_a <- MatrixQCvis::cv(t(cv_ffpe_a))[[1]]
+cv_ffpe_b <- MatrixQCvis::cv(t(cv_ffpe_b))[[1]]
+cv_ffpe_c <- MatrixQCvis::cv(t(cv_ffpe_c))[[1]]
+cv_plasma_a <- MatrixQCvis::cv(t(cv_plasma_a))[[1]]
+cv_plasma_b <- MatrixQCvis::cv(t(cv_plasma_b))[[1]]
+cv_serum_a <- MatrixQCvis::cv(t(cv_serum_a))[[1]]
+cv_serum_b <- MatrixQCvis::cv(t(cv_serum_b))[[1]]
+ 
+## create data frames
+cv_cells_a <- data.frame(protein = names(cv_cells_a), cv = cv_cells_a, 
+    condition = "Cells_AFA", experiment = "cells")
+cv_cells_b <- data.frame(protein = names(cv_cells_b), cv = cv_cells_b, 
+    condition = "Cells_TwoPhase_AFA", experiment = "cells")
+cv_ff_a <- data.frame(protein = names(cv_ff_a), cv = cv_ff_a, 
+    condition = "powder_AFA", experiment = "fresh-frozen")
+cv_ff_b <- data.frame(protein = names(cv_ff_b), cv = cv_ff_b, 
+    condition = "powder_TwoPhase_AFA", experiment = "fresh-frozen")
+cv_ff_c <- data.frame(protein = names(cv_ff_c), cv = cv_ff_c, 
+    condition = "Tissue_bulk_AFA", experiment = "fresh-frozen")
+cv_ffpe_a <- data.frame(protein = names(cv_ffpe_a), cv = cv_ffpe_a, 
+    condition = "powder_AFA", experiment = "FFPE")
+cv_ffpe_b <- data.frame(protein = names(cv_ffpe_b), cv = cv_ffpe_b, 
+    condition = "powder_TwoPhase_AFA", experiment = "FFPE")
+cv_ffpe_c <- data.frame(protein = names(cv_ffpe_c), cv = cv_ffpe_c, 
+    condition = "FFPE_AFA", experiment = "FFPE")
+cv_plasma_a <- data.frame(protein = names(cv_plasma_a), cv = cv_plasma_a, 
+    condition = "Plasma_TwoPhase_AFA", experiment = "plasma")
+cv_plasma_b <- data.frame(protein = names(cv_plasma_b), cv = cv_plasma_b, 
+    condition = "Plasma__AFA", experiment = "plasma")
+cv_serum_a <- data.frame(protein = names(cv_serum_a), cv = cv_serum_a, 
+    condition = "Serum_TwoPhase_AFA", experiment = "serum")
+cv_serum_b <- data.frame(protein = names(cv_serum_b), cv = cv_serum_b, 
+    condition = "Serum_AFA", experiment = "serum")
+
+## rbind data frames
+cv_df <- rbind(cv_cells_a, cv_cells_b, cv_ff_a, cv_ff_b, cv_ff_c, cv_ffpe_a,
+    cv_ffpe_b, cv_ffpe_c, cv_plasma_a, cv_plasma_b, cv_serum_a, cv_serum_b)
+cv_df$condition <- factor(cv_df$condition, levels = sort(unique(cv_df$condition)))
+
+g <- ggplot(cv_df) +
+    geom_boxplot(aes(x = condition, y = cv)) +
+    facet_wrap(~ experiment, scales = "free_x", nrow = 1) +
+    theme_classic() + ylab("coefficient of variation") + xlab("") +
+    theme(axis.text.x = element_text(angle = 90, 
+                                     vjust = 0.5, hjust = 1))
+g
+ggsave(g, filename = "coefficient_variation_peptide_boxplot.pdf")
+
+g <- ggplot(cv_df) +
+    geom_violin(aes(x = condition, y = cv), scale = "count") +
+    facet_wrap(~ experiment, scales = "free_x", nrow = 1) +
+    theme_classic() + ylab("coefficient of variation") + xlab("") +
+    theme(axis.text.x = element_text(angle = 90, 
+                                     vjust = 0.5, hjust = 1))
+g
+ggsave(g, filename = "coefficient_variation_peptide_violinplot.pdf")
+
+g <- ggplot(data = cv_df, aes_string(x = "condition", y = "cv", fill = "experiment")) +
+    geom_flat_violin(position = position_nudge(x = .2, y = 0), alpha = .8,
+        scale = "count") +
+    theme_classic() +
+    guides(color = "none") +
+    scale_fill_manual(values = as.character(wes_palette("Darjeeling1",
+        type = "discrete"))) +
+    geom_boxplot(width = .1, show.legend = FALSE, outlier.shape = NA,
+        alpha = 0.5) +
+    xlab("") + ylab("coefficient of variation") +
+    facet_wrap(~ experiment, scales = "free_x", nrow = 1) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+g
+ggsave(g, filename = "coefficient_variation_peptide_violinboxplot.pdf")
+
+```
+
+
+# Barplot with overlap (%) for different data sets
+
+```{r barplot_overlap, echo = FALSE}
+cells_bp <- cells[, cells$condition %in% c("Cells_AFA", "Cells_TwoPhase_AFA")]
+ff_bp_1 <- ff[, ff$condition %in% c("powder_AFA", "powder_TwoPhase_AFA")]
+ff_bp_2 <- ff[, ff$condition %in% c("Tissue_bulk_AFA", "powder_TwoPhase_AFA")]
+ffpe_bp_1 <- ffpe[, ffpe$condition %in% c("powder_AFA", "powder_TwoPhase_AFA")]
+ffpe_bp_2 <- ffpe[, ffpe$condition %in% c("powder_TwoPhase_AFA", "FFPE_AFA")]
+plasma_bp <- plasma[, plasma$condition %in% c("Plasma_TwoPhase_AFA", "Plasma_AFA")]
+serum_bp <- serum[, serum$condition %in% c("Serum_TwoPhase_AFA", "Serum_AFA")]
+
+## extract the features for cells
+feat_cells_bp_all <- extractComb(cells_bp, measured = TRUE, category = "condition",
+    combination = c("Cells_AFA", "Cells_TwoPhase_AFA"))
+feat_cells_bp_other <- extractComb(cells_bp, measured = TRUE, category = "condition",
+    combination = c("Cells_AFA"))
+feat_cells_bp_tp <- extractComb(cells_bp, measured = TRUE, category = "condition",
+    combination = c("Cells_TwoPhase_AFA"))
+
+## extract the features for fresh-frozen (contrast 1)
+feat_ff_bp_1_all <- extractComb(ff_bp_1, measured = TRUE, category = "condition",
+    combination = c("powder_AFA", "powder_TwoPhase_AFA"))
+feat_ff_bp_1_other <- extractComb(ff_bp_1, measured = TRUE, category = "condition",
+    combination = c("powder_AFA"))
+feat_ff_bp_1_tp <- extractComb(ff_bp_1, measured = TRUE, category = "condition",
+    combination = c("powder_TwoPhase_AFA"))
+
+## extract the features for fresh-frozen (contrast 2)
+feat_ff_bp_2_all <- extractComb(ff_bp_2, measured = TRUE, category = "condition",
+    combination = c("Tissue_bulk_AFA", "powder_TwoPhase_AFA"))
+feat_ff_bp_2_other <- extractComb(ff_bp_2, measured = TRUE, category = "condition",
+    combination = c("Tissue_bulk_AFA"))
+feat_ff_bp_2_tp <- extractComb(ff_bp_2, measured = TRUE, category = "condition",
+    combination = c("powder_TwoPhase_AFA"))
+
+## extract the features for FFPE (contrast 1)
+feat_ffpe_bp_1_all <- extractComb(ffpe_bp_1, measured = TRUE, category = "condition",
+    combination = c("powder_AFA", "powder_TwoPhase_AFA"))
+feat_ffpe_bp_1_other <- extractComb(ffpe_bp_1, measured = TRUE, category = "condition",
+    combination = c("powder_AFA"))
+feat_ffpe_bp_1_tp <- extractComb(ffpe_bp_1, measured = TRUE, category = "condition",
+    combination = c( "powder_TwoPhase_AFA"))
+
+## extract the features for FFPE (contrast 2)
+feat_ffpe_bp_2_all <- extractComb(ffpe_bp_2, measured = TRUE, category = "condition",
+    combination = c("powder_TwoPhase_AFA", "FFPE_AFA"))
+feat_ffpe_bp_2_other <- extractComb(ffpe_bp_2, measured = TRUE, category = "condition",
+    combination = c("FFPE_AFA"))
+feat_ffpe_bp_2_tp <- extractComb(ffpe_bp_2, measured = TRUE, category = "condition",
+    combination = c("powder_TwoPhase_AFA"))
+
+## extract the features for plasma 
+feat_plasma_bp_all <- extractComb(plasma_bp, measured = TRUE, category = "condition",
+    combination = c("Plasma_TwoPhase_AFA", "Plasma_AFA"))
+feat_plasma_bp_other <- extractComb(plasma_bp, measured = TRUE, category = "condition",
+    combination = c("Plasma_AFA"))
+feat_plasma_bp_tp <- extractComb(plasma_bp, measured = TRUE, category = "condition",
+    combination = c("Plasma_TwoPhase_AFA"))
+
+## extract the features for serum
+feat_serum_bp_all <- extractComb(serum_bp, measured = TRUE, category = "condition",
+    combination = c("Serum_TwoPhase_AFA", "Serum_AFA"))
+feat_serum_bp_other <- extractComb(serum_bp, measured = TRUE, category = "condition",
+    combination = c("Serum_AFA"))
+feat_serum_bp_tp <- extractComb(serum_bp, measured = TRUE, category = "condition",
+    combination = c("Serum_TwoPhase_AFA"))
+
+## calculate the percentage of shared and unique features and write to data.frame
+n_cells <- 100 / length(c(feat_cells_bp_all, feat_cells_bp_other, feat_cells_bp_tp))
+n_ff_1 <- 100 / length(c(feat_ff_bp_1_all, feat_ff_bp_1_other, feat_ff_bp_1_tp))
+n_ff_2 <- 100 / length(c(feat_ff_bp_2_all, feat_ff_bp_2_other, feat_ff_bp_2_tp))
+n_ffpe_1 <- 100 / length(c(feat_ffpe_bp_1_all, feat_ffpe_bp_1_other, feat_ffpe_bp_1_tp))
+n_ffpe_2 <- 100 / length(c(feat_ffpe_bp_2_all, feat_ffpe_bp_2_other, feat_ffpe_bp_2_tp))
+n_plasma <- 100 / length(c(feat_plasma_bp_all, feat_plasma_bp_other, feat_plasma_bp_tp))
+n_serum <- 100 / length(c(feat_serum_bp_all, feat_serum_bp_other, feat_serum_bp_tp))
+df_bp <- data.frame(
+    rbind(c(length(feat_cells_bp_all) * n_cells, "cells", "shared"),
+        c(length(feat_cells_bp_other) * n_cells, "cells", "other"),
+        c(length(feat_cells_bp_tp) * n_cells, "cells", "two phase"),
+        c(length(feat_ff_bp_1_all) * n_ff_1, "fresh-frozen (powder)", "shared"),
+        c(length(feat_ff_bp_1_other) * n_ff_1, "fresh-frozen (powder)", "other"),
+        c(length(feat_ff_bp_1_tp) * n_ff_1, "fresh-frozen (powder)", "two phase"),  
+        c(length(feat_ff_bp_2_all) * n_ff_2, "fresh-frozen (bulk)", "shared"),
+        c(length(feat_ff_bp_2_other) * n_ff_2, "fresh-frozen (bulk)", "other"),
+        c(length(feat_ff_bp_2_tp) * n_ff_2, "fresh-frozen (bulk)", "two phase"),
+        c(length(feat_ffpe_bp_1_all) * n_ffpe_1, "FFPE (powder)", "shared"),
+        c(length(feat_ffpe_bp_1_other) * n_ffpe_1, "FFPE (powder)", "other"),
+        c(length(feat_ffpe_bp_1_tp) * n_ffpe_1, "FFPE (powder)", "two phase"),  
+        c(length(feat_ffpe_bp_2_all) * n_ffpe_2, "FFPE (bulk)", "shared"),
+        c(length(feat_ffpe_bp_2_other) * n_ffpe_2, "FFPE (bulk)", "other"),
+        c(length(feat_ffpe_bp_2_tp) * n_ffpe_2, "FFPE (bulk)", "two phase"),
+        c(length(feat_plasma_bp_all) * n_plasma, "plasma", "shared"),
+        c(length(feat_plasma_bp_other) * n_plasma, "plasma", "other"),
+        c(length(feat_plasma_bp_tp) * n_plasma, "plasma", "two phase"),
+        c(length(feat_serum_bp_all) * n_serum, "serum", "shared"),
+        c(length(feat_serum_bp_other) * n_serum, "serum", "other"),
+        c(length(feat_serum_bp_tp) * n_serum, "serum", "two phase")))
+colnames(df_bp) <- c("percent", "material", "type")
+df_bp$percent <- as.numeric(df_bp$percent)
+df_bp$type <- factor(df_bp$type, levels = c("other", "two phase", "shared"))
+
+g <- ggplot(df_bp, aes(y = percent, x = material, col = type, fill = type)) + 
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = as.character(wes_palette("FantasticFox1",
+        type = "discrete"))) +
+    scale_color_manual(values = as.character(wes_palette("FantasticFox1",
+        type = "discrete"))) +
+    ##facet_wrap(~ material, nrow = 1, scales = "free_x") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90))
+g
+ggsave(g, filename = "barplot_overlap_peptide.pdf")
+```
+

@@ -1,0 +1,213 @@
+---
+title: "Comparison of Extraction Methods - differential expression of metabolites"
+subtitle: "Thorax"
+author:
+    - Thomas Naake^[European Molecular Biology Laboratory, Meyerhofstrasse 1, 69117 Heidelberg, Germany]
+fig_width: 15
+fig_height: 10
+fontsize: 12pt
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float: TRUE
+    theme: united
+    number_sections: true
+    highlight: tango
+---
+
+```{r env, include=FALSE, echo=FALSE, cache=FALSE}
+library("knitr")
+library("ggplot2")
+library("tidyverse")
+knitr::opts_chunk$set(stop_on_error = 1L, fig.pos = "ht", dev = "png")
+suppressPackageStartupMessages(library("wesanderson"))
+suppressPackageStartupMessages(library("MatrixQCvis"))
+suppressPackageStartupMessages(library("PhysicoChemicalPropertiesProtein"))
+suppressPackageStartupMessages(library("tidyverse"))
+suppressPackageStartupMessages(library("limma"))
+knitr::opts_knit$set(root.dir = "~/GitLab/20211202_extraction_method/")
+```
+
+# Load data 
+
+```{r load_data}
+se <- biocrates("2022-02-22_Conc_raw_smartcare 10 patient thorax cohort_hmdb.xlsx")
+se$tissue <- ""
+se$tissue[grep(x = se$Sample.Description, pattern = "_TU")] <- "TU"
+se$tissue[grep(x = se$Sample.Description, pattern = "_NG")] <- "NG"
+se$individual <- stringr::str_remove(se$Sample.Description, pattern = "_TU|_NG")
+```
+
+# Load data and filter features
+
+```{r metIDQ_get_high_quality_features_fct, eval = TRUE, echo = FALSE}
+## Define a helper function to remove low-quality features. The function 
+## `cellColor` is used within the function `metIDQ_get_high_quality_features`.
+setwd("C:/Users/naake/Documents/GitLab/20211202_extraction_method/")
+
+#' @name cellColor
+#' 
+#' @title cellColor - helper function for metIDQ_get_high_quality_features
+cellColor <- function(style) {
+        fg  <- style$getFillForegroundXSSFColor()
+        rgb <- tryCatch(fg$getRgb(), error = function(e) "")
+        rgb <- paste(rgb, collapse = "")
+        return(rgb)
+}
+
+#' @name metIDQ_get_high_quality_features
+#'
+#' @title Get a vector with the high-quality features to retain
+metIDQ_get_high_quality_features <- function(file, threshold = 0.66) {
+    ## get the background color
+    wb <- xlsx::loadWorkbook(file = file)
+    sheet1 <- xlsx::getSheets(wb)[[1]]
+    rows <- xlsx::getRows(sheet1)
+    cells <- xlsx::getCells(rows)
+    styles <- sapply(cells, xlsx::getCellStyle)
+    bg <- sapply(styles, cellColor) 
+    
+    ## use values to get the indices where the actual data is stored
+    values <- sapply(cells, xlsx::getCellValue)
+
+    ## convert bg and values to matrix that it has the same dimension as before
+    if (all(names(bg) != names(values))) stop("dimensions do not match")
+    row_index <- as.numeric(unlist(lapply(strsplit(names(bg), split = "[.]"), "[", 1)))
+    col_index <- as.numeric(unlist(lapply(strsplit(names(bg), split = "[.]"), "[", 2)))
+    mat_values <- mat_bg <- matrix("", ncol = max(col_index), nrow = max(row_index))
+    for (i in 1:length(bg)) {
+        mat_bg[row_index[i], col_index[i]] <- bg[i]
+        mat_values[row_index[i], col_index[i]] <- values[i]
+    }
+    
+    ## obtain the indices of the cells where the values/background colors are 
+    ## stored in
+    row_inds <- which(!is.na(mat_values[, 1]))
+    row_inds <- row_inds[!row_inds %in% 1:27]
+    col_inds <- rbind(which(mat_values == "C0", arr.ind = TRUE),
+                    which(mat_values == "Choline", arr.ind = TRUE))
+    colnames(mat_values) <- colnames(mat_bg) <- mat_values[col_inds[1, "row"], ]
+    col_inds <- seq(col_inds[1, "col"], col_inds[2, "col"])
+    
+    ## iterate through the columns of mat_bg and check the color values 
+    ## against the QC of MetIDS## "00cd66" == green, "87ceeb" == lightblue
+    valid <- apply(mat_bg[row_inds, col_inds], 2, 
+        function(x) sum(x %in% c("00cd66", "87ceeb"))) 
+
+    ## require that at least threshold*100% values per metabolite are 
+    ## "green"/"lightblue", 
+    valid / length(row_inds)  > threshold
+}
+```
+
+Run the function `metIDQ_get_high_quality_features` and only retain the 
+features that have more than 2/3 of "green"/"lightblue" values.
+
+```{r filter}
+file <- "2022-02-22_Conc_raw_smartcare 10 patient thorax cohort_hmdb.xlsx"
+features <- metIDQ_get_high_quality_features(file, threshold = 2/3)
+se <- se[make.names(names(which(features))), ]
+```
+
+
+# QC
+
+```{r shinyQC, eval = FALSE}
+shinyQC(se)
+```
+
+Exclude the following samples:
+`PBS` samples and `QC` samples.
+
+
+```{r exclude_samples}
+exclude <- c("PBS_1", "PBS_2", "PBS_3", "Quant 500_QC1_1", "Quant 500_QC2_2",
+    "Quant 500_QC2_3", "Quant 500_QC2_4", "Quant 500_QC3_5")
+se <- MatrixQCvis:::selectSampleSE(se, 
+    selection = exclude,
+    mode = "exclude")
+```
+
+
+# Data Transformation
+
+Perform `log`-transformation on the data set.
+
+```{r data_transformation}
+a <- assay(se)
+a[a <= 0] <- NA
+a_t <- transformAssay(a, method = "log")
+se <- MatrixQCvis:::updateSE(se = se, a = a_t)
+
+saveRDS(se, file = "SummarizedExperiment_extraction_method_cohort_metabolomics.RDS")
+```
+
+# Run the linear model
+
+```{r}
+cD <- colData(se)
+cD <- colData(se)
+design <- model.matrix(~ 0 + tissue, data = cD)
+colnames(design) <- make.names(colnames(design))
+cor <- duplicateCorrelation(assay(se), design, block=cD$individual)
+fit <- lmFit(object = assay(se), design = design, block = cD$individual,
+    correlation = cor$consensus)
+
+## create contrasts
+contrasts <- makeContrasts(
+    TUvsNG = ( tissueTU - tissueNG),
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+## set parameters for differential expression
+num <- Inf
+p_val <- 1
+adj <- "BH"
+```  
+
+
+## TU vs. NG
+
+We test here the DE proteins between NG and TU. 
+
+```{r autoSP3vsMTBE_SP3}
+tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
+    coef = "TUvsNG")
+rmarkdown::paged_table(tT)
+sum(tT$adj.P.Val < 0.05, na.rm = TRUE)
+tT <- cbind(name = rownames(tT), tT)
+volcanoPlot(tT)
+
+write.table(tT, file = "metabolomics_DE_t_TUvsNG.txt", 
+    quote = FALSE, sep = "\t")
+```
+
+## Individuals as covariates
+
+```{r}
+cD <- colData(se)
+design <- model.matrix(~ 0 + tissue + individual, data = cD)
+fit <- lmFit(object = assay(se), design = design)
+
+## create contrasts
+contrasts <- makeContrasts(
+    TUvsNG = (tissueTU - tissueNG),
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+## set parameters for differential expression
+num <- Inf
+p_val <- 1
+adj <- "BH"
+
+## get the features for autoSP3
+tT_covariate <- topTable(fit_eB, number = num, p.value = p_val, 
+    adjust.method = adj, coef = "TUvsNG")
+
+cor(x = tT_covariate$t[order(rownames(tT_covariate))], y = tT$t[order(rownames(tT))], 
+    use = "pairwise.complete.obs")
+```
+
