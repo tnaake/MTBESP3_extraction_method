@@ -117,7 +117,7 @@ cD$Type_Processing <- paste(cD$Type, cD$Processing, sep = "_")
 cD$Individual <- stringr::str_remove(cD$Pseudonym, pattern = "_NG|_TU")
 design <- model.matrix(~ 0 + Type_Processing, data = cD)
 colnames(design) <- make.names(colnames(design))
-cor <- duplicateCorrelation(assay(se), design, block=cD$Individual)
+cor <- limma::duplicateCorrelation(assay(se), design, block=cD$Individual)
 fit <- lmFit(object = assay(se), design = design, block = cD$Individual,
     correlation = cor$consensus)
 
@@ -154,6 +154,7 @@ methods yield similar results.
 tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
     coef = "autoSP3vsMTBE_SP3")
 rmarkdown::paged_table(tT)
+sum(tT[, "adj.P.Val"] < 0.05)
 tT <- cbind(name = rownames(tT), tT)
 volcanoPlot(tT)
 tT_autoSP3vsMTBE <- tT
@@ -174,6 +175,7 @@ methods yield similar results.
 tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
     coef = "NG_autoSP3vsMTBE_SP3")
 rmarkdown::paged_table(tT)
+sum(tT[, "adj.P.Val"] < 0.05)
 tT <- cbind(name = rownames(tT), tT)
 volcanoPlot(tT)
 tT_NG <- tT
@@ -195,6 +197,7 @@ methods yield similar results.
 tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
     coef = "TU_autoSP3vsMTBE_SP3")
 rmarkdown::paged_table(tT)
+sum(tT[, "adj.P.Val"] < 0.05)
 tT <- cbind(name = rownames(tT), tT)
 volcanoPlot(tT)
 tT_TU <- tT
@@ -260,7 +263,7 @@ sum(tT_MTBE_SP3$adj.P.Val < 0.05, na.rm = TRUE)
 tT_MTBE_SP3 <- cbind(name = rownames(tT_MTBE_SP3), tT_MTBE_SP3)
 volcanoPlot(tT_MTBE_SP3)
 
-write.table(tT, file = "proteomics_DE_t_TUvsNG_MTBE_SP3.txt", 
+write.table(tT_MTBE_SP3, file = "proteomics_DE_t_TUvsNG_MTBE_SP3.txt", 
     quote = FALSE, sep = "\t")
 
 ## only continue with the significant ones 
@@ -287,6 +290,7 @@ tT_TUvsNG <- tT
 df <- data.frame(vals_x = tT_autoSP3[rownames(tT_autoSP3), "t"], 
         vals_y = tT_MTBE_SP3[rownames(tT_autoSP3), "t"],
         vals_z = tT_TUvsNG[rownames(tT_autoSP3), "t"])
+rownames(df) <- rownames(tT_autoSP3)
 
 ## t-values(autoSP3) vs t-values (MTBE-SP3)
 g <- ggplot(df, aes_string(x = "vals_x", y = "vals_y")) +
@@ -298,8 +302,8 @@ g <- ggplot(df, aes_string(x = "vals_x", y = "vals_y")) +
     theme(legend.position = "none")
 g 
 ggsave(g, filename = "scatter_NATvsTT_autoSP3_MTBESP3.pdf")
-cor.test(tT_autoSP3$t[order(rownames(tT_autoSP3))],
-    tT_MTBE_SP3$t[order(rownames(tT_MTBE_SP3))], method = "spearman")
+cor.test(tT_autoSP3[rownames(tT_autoSP3), "t"],
+    tT_MTBE_SP3[rownames(tT_autoSP3), "t"], method = "spearman")
 
 ## t-values(autoSP3) vs t-values (AutoSP3vsMTBE-SP3)
 g <- ggplot(df, aes_string(x = "vals_x", y = "vals_z")) +
