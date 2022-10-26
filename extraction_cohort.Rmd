@@ -34,7 +34,6 @@ knitr::opts_knit$set(root.dir = "~/GitLab/20211202_extraction_method/")
 ```{r load_data}
 se <- maxQuant("proteinGroups_thorax.xlsx", intensity = "LFQ", type = "xlsx", 
     sheet = "filtered")
-
 ## load annotation
 cD <- openxlsx::read.xlsx("proteinGroups_thorax.xlsx", sheet = "annotation_filtered")
 cD[, "Sample_IDs"] <- make.names(cD[, "Sample_IDs"])
@@ -98,8 +97,9 @@ se <- se[!rownames(se) %in% exclude_pattern, ]
 Perform `log`-transformation on the data set.
 
 ```{r data_transformation}
-## keep features with more than ca. 91% (32/35) measured values
-se <- se[rowSums(is.na(assay(se))) < 4 , ]
+## keep features with more than ca. 60% (21/35) measured values
+se <- se[rowSums(!is.na(assay(se))) >= 21 , ] 
+dim(se)
 
 ## transformation and imputation
 a <- assay(se)
@@ -154,7 +154,7 @@ methods yield similar results.
 tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
     coef = "autoSP3vsMTBE_SP3")
 rmarkdown::paged_table(tT)
-sum(tT[, "adj.P.Val"] < 0.05)
+sum(tT[, "adj.P.Val"] < 0.05, na.rm = TRUE)
 tT <- cbind(name = rownames(tT), tT)
 volcanoPlot(tT)
 tT_autoSP3vsMTBE <- tT
@@ -175,7 +175,7 @@ methods yield similar results.
 tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
     coef = "NG_autoSP3vsMTBE_SP3")
 rmarkdown::paged_table(tT)
-sum(tT[, "adj.P.Val"] < 0.05)
+sum(tT[, "adj.P.Val"] < 0.05, na.rm = TRUE)
 tT <- cbind(name = rownames(tT), tT)
 volcanoPlot(tT)
 tT_NG <- tT
@@ -197,7 +197,7 @@ methods yield similar results.
 tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
     coef = "TU_autoSP3vsMTBE_SP3")
 rmarkdown::paged_table(tT)
-sum(tT[, "adj.P.Val"] < 0.05)
+sum(tT[, "adj.P.Val"] < 0.05, na.rm = TRUE)
 tT <- cbind(name = rownames(tT), tT)
 volcanoPlot(tT)
 tT_TU <- tT
@@ -248,7 +248,6 @@ We will continue and check the overlap of DE proteins between the contrasts:
 ## autoSP3
 tT_autoSP3 <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
     coef = "autoSP3")
-rmarkdown::paged_table(tT_autoSP3)
 sum(tT_autoSP3$adj.P.Val < 0.05, na.rm = TRUE)
 tT_autoSP3 <- cbind(name = rownames(tT_autoSP3), tT_autoSP3)
 volcanoPlot(tT_autoSP3)
