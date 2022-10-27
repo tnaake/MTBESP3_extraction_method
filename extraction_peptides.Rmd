@@ -23,6 +23,7 @@ library("tidyverse")
 knitr::opts_chunk$set(stop_on_error = 1L, fig.pos = "ht", dev = "png")
 suppressPackageStartupMessages(library("Biostrings"))
 suppressPackageStartupMessages(library("MatrixQCvis"))
+suppressPackageStartupMessages(library("MatrixQCvisUtils"))
 suppressPackageStartupMessages(library("PhysicoChemicalPropertiesProtein"))
 suppressPackageStartupMessages(library("tidyverse"))
 suppressPackageStartupMessages(library("limma"))
@@ -202,8 +203,8 @@ plot_violin_barplot <- function(df, x = "x", y = "y", fill = "x",
         guides(color = "none") +
         geom_boxplot(width = .1, show.legend = FALSE, outlier.shape = NA, 
             alpha = 0.5) +
-        xlab("") +
-        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+        xlab("") #+
+        #theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
     
     ## add indications of significance
     if (length(comparisons) > 0)
@@ -260,7 +261,7 @@ feat_cells <- extractComb(cells, combination = c("Cells_AFA", "Cells_TwoPhase_AF
 Only continue with the shared features in the following analyses.
 
 ```{r cells_feat, echo = FALSE}
-## write also the unique proteins to files
+## write also the unique peptides to files
 feat <- extractComb(cells, combination = c("Cells_AFA"), 
     measured = TRUE, category = "condition")
 write.table(feat, file = "peptides_unique_features_cells_Cells_AFA.txt",
@@ -380,12 +381,13 @@ gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(gravy), "shared"), 
-    cbind(unlist(gravy_other), "other"),
-    cbind(unlist(gravy_tp), "two phase")))
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_gravy_cells.pdf", 
@@ -402,12 +404,13 @@ iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(iep), "shared"), 
-    cbind(unlist(iep_other), "other"),
-    cbind(unlist(iep_tp), "two phase")))
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_iep_cells.pdf", 
@@ -452,7 +455,7 @@ MatrixQCvis::upsetCategory(ff_1, category = "condition", measured = TRUE)
 Only continue with the shared features in the following analyses.
 
 ```{r ff_1_feat, eval = TRUE, echo = FALSE}
- ## write also the unique proteins to files
+ ## write also the unique peptides to files
 feat <- extractComb(ff_1, combination = c("powder_AFA"), 
     measured = TRUE, category = "condition")
 write.table(feat, file = "peptides_unique_features_ff_contrast1_powder.txt",
@@ -574,12 +577,13 @@ gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(gravy), "shared"), 
-    cbind(unlist(gravy_other), "other"),
-    cbind(unlist(gravy_tp), "two phase")))
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_gravy_freshfrozen_1.pdf", 
@@ -596,12 +600,13 @@ iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(iep), "shared"), 
-    cbind(unlist(iep_other), "other"),
-    cbind(unlist(iep_tp), "two phase")))
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_iep_freshfrozen_1.pdf", 
@@ -623,7 +628,7 @@ MatrixQCvis::upsetCategory(ff_2, category = "condition", measured = TRUE)
 Only continue with the shared features in the following analyses.
 
 ```{r ff_2_feat, eval = TRUE, echo = FALSE}
-## write also the unique proteins to files
+## write also the unique peptides to files
 feat <- extractComb(ff_2, combination = c("Tissue_bulk_AFA"), 
     measured = TRUE, category = "condition")
 write.table(feat, file = "peptides_unique_features_ff_contrast2_Tissue_bulk.txt",
@@ -729,12 +734,13 @@ gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(gravy), "shared"), 
-    cbind(unlist(gravy_other), "other"),
-    cbind(unlist(gravy_tp), "two phase")))
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_gravy_freshfrozen_2.pdf", 
@@ -751,12 +757,13 @@ iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(iep), "shared"), 
-    cbind(unlist(iep_other), "other"),
-    cbind(unlist(iep_tp), "two phase")))
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_iep_freshfrozen_2.pdf", 
@@ -801,7 +808,7 @@ MatrixQCvis::upsetCategory(ffpe_1, category = "condition", measured = TRUE)
 Only continue with the shared features in the following analyses.
 
 ```{r ffpe_1_feat, echo = FALSE}
-## write also the unique proteins to files
+## write also the unique peptides to files
 feat <- extractComb(ffpe_1, combination = c("powder_AFA"), 
     measured = TRUE, category = "condition")
 write.table(feat, file = "peptides_unique_features_ffpe_contrast1_powder.txt",
@@ -922,12 +929,13 @@ gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(gravy), "shared"), 
-    cbind(unlist(gravy_other), "other"),
-    cbind(unlist(gravy_tp), "two phase")))
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_gravy_FFPE_1.pdf", 
@@ -944,12 +952,13 @@ iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(iep), "shared"), 
-    cbind(unlist(iep_other), "other"),
-    cbind(unlist(iep_tp), "two phase")))
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_iep_FFPE_1.pdf", 
@@ -972,7 +981,7 @@ MatrixQCvis::upsetCategory(ffpe_2, category = "condition", measured = TRUE)
 Only continue with the shared features in the following analyses.
 
 ```{r ffpe_2_feat, echo = FALSE}
-## write also the unique proteins to files
+## write also the unique peptides to files
 feat <- extractComb(ffpe_2, combination = c("FFPE_AFA"), 
     measured = TRUE, category = "condition")
 write.table(feat, file = "peptides_unique_features_ffpe_contrast2_FFPE.txt",
@@ -1081,12 +1090,13 @@ gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(gravy), "shared"), 
-    cbind(unlist(gravy_other), "other"),
-    cbind(unlist(gravy_tp), "two phase")))
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_gravy_FFPE_2.pdf", 
@@ -1103,12 +1113,13 @@ iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(iep), "shared"), 
-    cbind(unlist(iep_other), "other"),
-    cbind(unlist(iep_tp), "two phase")))
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_iep_FFPE_2.pdf", 
@@ -1151,7 +1162,7 @@ MatrixQCvis::upsetCategory(plasma, category = "condition", measured = TRUE)
 Only continue with the shared features in the following analyses.
 
 ```{r plasma_feat, echo = FALSE}
-## write also the unique proteins to files
+## write also the unique peptides to files
 feat <- extractComb(plasma, combination = c("Plasma_AFA"), 
     measured = TRUE, category = "condition")
 write.table(feat, file = "peptides_unique_features_plasma_Plasma_AFA.txt",
@@ -1270,12 +1281,13 @@ gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(gravy), "shared"), 
-    cbind(unlist(gravy_other), "other"),
-    cbind(unlist(gravy_tp), "two phase")))
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_gravy_plasma.pdf", 
@@ -1292,12 +1304,13 @@ iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(iep), "shared"), 
-    cbind(unlist(iep_other), "other"),
-    cbind(unlist(iep_tp), "two phase")))
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_iep_plasma.pdf", 
@@ -1339,7 +1352,7 @@ MatrixQCvis::upsetCategory(serum, category = "condition", measured = TRUE)
 Only continue with the shared features in the following analyses.
 
 ```{r serum_feat, echo = FALSE}
-## write also the unique proteins to files
+## write also the unique peptides to files
 feat <- extractComb(serum, combination = c("Serum_AFA"), 
     measured = TRUE, category = "condition")
 write.table(feat, file = "peptides_unique_features_serum_Serum_AFA.txt",
@@ -1420,7 +1433,7 @@ t <- tT[, "t"]
 
 ## GRAVY score
 rD <- rowData(serum)
-gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(AAString(aa)))
+gravy <- lapply(rD[rownames(tT), "feature"], function(aa) calculateGravyScore(aa))
 gravy <- unlist(gravy)
 df <- data.frame(gravy = gravy, t = t)
 ggplot(df, aes(x = gravy, y = t)) + 
@@ -1431,7 +1444,7 @@ ggplot(df, aes(x = gravy, y = t)) +
 cor.test(gravy, t, method = "spearman")
 
 ## isoelectric point
-iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(AAString(aa), method = "IPC_protein"))
+iep <- lapply(rD[rownames(tT), "feature"], function(aa) calculateIsoelectricPoint(aa, method = "IPC_protein"))
 iep <- unlist(iep)
 df <- data.frame(iep = iep, t = t)
 ggplot(df, aes(x = iep, y = t)) + 
@@ -1456,12 +1469,13 @@ gravy_tp <- lapply(feat[, 1], function(aa) calculateGravyScore(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(gravy), "shared"), 
-    cbind(unlist(gravy_other), "other"),
-    cbind(unlist(gravy_tp), "two phase")))
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_gravy_serum.pdf", 
@@ -1478,12 +1492,13 @@ iep_tp <- lapply(feat[, 1], function(aa) calculateIsoelectricPoint(aa))
 ## create df
 df <- data.frame(rbind(
     cbind(unlist(iep), "shared"), 
-    cbind(unlist(iep_other), "other"),
-    cbind(unlist(iep_tp), "two phase")))
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
 colnames(df) <- c("score", "type") 
 df$score <- as.numeric(df$score)
-df$type <- factor(df$type, levels = c("other", "two phase", "shared")) 
-comparisons <- list( c("other", "shared"), c("two phase", "shared"))
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
 
 plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
     comparisons = comparisons, file = "peptide_violin_iep_serum.pdf", 
@@ -1665,29 +1680,29 @@ n_plasma <- 100 / length(c(feat_plasma_bp_all, feat_plasma_bp_other, feat_plasma
 n_serum <- 100 / length(c(feat_serum_bp_all, feat_serum_bp_other, feat_serum_bp_tp))
 df_bp <- data.frame(
     rbind(c(length(feat_cells_bp_all) * n_cells, "cells", "shared"),
-        c(length(feat_cells_bp_other) * n_cells, "cells", "other"),
-        c(length(feat_cells_bp_tp) * n_cells, "cells", "two phase"),
+        c(length(feat_cells_bp_other) * n_cells, "cells", "autoSP3"),
+        c(length(feat_cells_bp_tp) * n_cells, "cells", "MTBE-SP3"),
         c(length(feat_ff_bp_1_all) * n_ff_1, "fresh-frozen (powder)", "shared"),
-        c(length(feat_ff_bp_1_other) * n_ff_1, "fresh-frozen (powder)", "other"),
-        c(length(feat_ff_bp_1_tp) * n_ff_1, "fresh-frozen (powder)", "two phase"),  
+        c(length(feat_ff_bp_1_other) * n_ff_1, "fresh-frozen (powder)", "autoSP3"),
+        c(length(feat_ff_bp_1_tp) * n_ff_1, "fresh-frozen (powder)", "MTBE-SP3"),  
         c(length(feat_ff_bp_2_all) * n_ff_2, "fresh-frozen (bulk)", "shared"),
-        c(length(feat_ff_bp_2_other) * n_ff_2, "fresh-frozen (bulk)", "other"),
-        c(length(feat_ff_bp_2_tp) * n_ff_2, "fresh-frozen (bulk)", "two phase"),
+        c(length(feat_ff_bp_2_other) * n_ff_2, "fresh-frozen (bulk)", "autoSP3"),
+        c(length(feat_ff_bp_2_tp) * n_ff_2, "fresh-frozen (bulk)", "MTBE-SP3"),
         c(length(feat_ffpe_bp_1_all) * n_ffpe_1, "FFPE (powder)", "shared"),
-        c(length(feat_ffpe_bp_1_other) * n_ffpe_1, "FFPE (powder)", "other"),
-        c(length(feat_ffpe_bp_1_tp) * n_ffpe_1, "FFPE (powder)", "two phase"),  
+        c(length(feat_ffpe_bp_1_other) * n_ffpe_1, "FFPE (powder)", "autoSP3"),
+        c(length(feat_ffpe_bp_1_tp) * n_ffpe_1, "FFPE (powder)", "MTBE-SP3"),  
         c(length(feat_ffpe_bp_2_all) * n_ffpe_2, "FFPE (bulk)", "shared"),
-        c(length(feat_ffpe_bp_2_other) * n_ffpe_2, "FFPE (bulk)", "other"),
-        c(length(feat_ffpe_bp_2_tp) * n_ffpe_2, "FFPE (bulk)", "two phase"),
+        c(length(feat_ffpe_bp_2_other) * n_ffpe_2, "FFPE (bulk)", "autoSP3"),
+        c(length(feat_ffpe_bp_2_tp) * n_ffpe_2, "FFPE (bulk)", "MTBE-SP3"),
         c(length(feat_plasma_bp_all) * n_plasma, "plasma", "shared"),
-        c(length(feat_plasma_bp_other) * n_plasma, "plasma", "other"),
-        c(length(feat_plasma_bp_tp) * n_plasma, "plasma", "two phase"),
+        c(length(feat_plasma_bp_other) * n_plasma, "plasma", "autoSP3"),
+        c(length(feat_plasma_bp_tp) * n_plasma, "plasma", "MTBE-SP3"),
         c(length(feat_serum_bp_all) * n_serum, "serum", "shared"),
-        c(length(feat_serum_bp_other) * n_serum, "serum", "other"),
-        c(length(feat_serum_bp_tp) * n_serum, "serum", "two phase")))
+        c(length(feat_serum_bp_other) * n_serum, "serum", "autoSP3"),
+        c(length(feat_serum_bp_tp) * n_serum, "serum", "MTBE-SP3")))
 colnames(df_bp) <- c("percent", "material", "type")
 df_bp$percent <- as.numeric(df_bp$percent)
-df_bp$type <- factor(df_bp$type, levels = c("other", "two phase", "shared"))
+df_bp$type <- factor(df_bp$type, levels = c("autoSP3", "MTBE-SP3", "shared"))
 
 g <- ggplot(df_bp, aes(y = percent, x = material, col = type, fill = type)) + 
     geom_bar(stat = "identity") +
