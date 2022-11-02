@@ -34,6 +34,61 @@ suppressMessages(
 ```
 
 
+```{r helper_fcts, message=FALSE, warning=FALSE, echo = FALSE}
+plot_violin_barplot <- function(df, x = "x", y = "y", fill = "x", 
+    comparisons = NULL, file = NULL, method = "t.test", 
+    method.args = list(method = "spearman"), paired = FALSE) {
+    
+    p <- ggplot(data = df, aes_string(x = x, y = y, fill = fill)) +
+        geom_flat_violin(position = position_nudge(x = .2, y = 0), alpha = .8,
+            scale = "count") +
+        scale_color_manual(values = as.character(wes_palette("FantasticFox1"))) +
+        scale_fill_manual(values = as.character(wes_palette("FantasticFox1"))) +
+        theme_classic() + 
+        guides(color = "none") +
+        geom_boxplot(width = .1, show.legend = FALSE, outlier.shape = NA, 
+            alpha = 0.5) +
+        xlab("")
+    
+    ## add indications of significance
+    if (length(comparisons) > 0)
+        p <- p + ggpubr::stat_compare_means(comparisons = comparisons, 
+            paired = paired, method = method, label = "p.signif", 
+            method.args = method.args)
+    
+    if (length(file) > 0) {
+        pdf(file)
+        print(p)
+        dev.off()
+    }
+    
+    ## return the plot
+    p
+}
+
+plotGO <- function(go, xlab = "Biological Process", ylab = "-log10(p-value)", n = 10) {
+    go$new_term <- go$Term
+    #go$new_term <- paste(rownames(go), go$Term, sep = ",")
+    go <- go[order(go$P.DE)[1:n], ]
+    go$new_term <- factor(x = go$new_term, levels = go$new_term[n:1])
+    
+    ggplot(go, aes(x = new_term, y = -log10(P.DE))) +
+        stat_summary(geom = "bar", fun = "mean", position = "identity") +
+        xlab(xlab) +
+        ylab(ylab) +
+        theme_classic() +
+        theme(
+            legend.position = 'none',
+            axis.text.x = element_text(angle = 0, size = 10, hjust = 1.10),
+            axis.text.y = element_text(angle = 0, size = 10, vjust = 0.5),
+        axis.title = element_text(size = 12)) +
+        guides(colour = guide_legend(override.aes = list(size = 2.5))) +
+        coord_flip()
+}
+
+```
+
+
 In the following section check if there is a relation between physico-chemical
 properties and the observed differences between the extraction methods.
 
@@ -308,6 +363,7 @@ write.table(feat, file = "unique_features_cells_Cells_TwoPhase_AFA.txt",
     quote = FALSE, row.names = FALSE)
 
 ## continue only with the overlap
+cells_all <- cells
 feat <- extractComb(cells, combination = c("Cells_AFA", "Cells_TwoPhase_AFA"), 
     measured = TRUE, category = "condition")
 cells <- cells[feat, ]
@@ -366,18 +422,24 @@ and Cellular Component (CC). Perform a Fisher test with the significant features
 ```{r enrichment_cells, message=FALSE, warning=FALSE, echo = FALSE}
 allRes <- enrichment(tT, organism = "Hs")
 print("## BP")
-rmarkdown::paged_table(topGO(allRes, ontology = "BP", number = num))
+bp <- topGO(allRes, ontology = "BP", number = num)
+rmarkdown::paged_table(bp)
+ggsave(plotGO(bp, xlab = "Biological Process"), file = "GO_Cells_BP.pdf")
 print("## MF")
-rmarkdown::paged_table(topGO(allRes, ontology = "MF", number = num))
+mf <- topGO(allRes, ontology = "MF", number = num)
+rmarkdown::paged_table(mf)
+ggsave(plotGO(mf, xlab = "Molecular Function"), file = "GO_Cells_MF.pdf")
 print("## CC")
-rmarkdown::paged_table(topGO(allRes, ontology = "CC", number = num))
+cc <- topGO(allRes, ontology = "CC", number = num)
+rmarkdown::paged_table(cc)
+ggsave(plotGO(cc, xlab = "Cellular Component"), file = "GO_Cells_CC.pdf")
 ```
 
 ## Cells: Association to physico-chemical parameters
 
 Take the t-values and plot against the GRAVY-Score and Isoelectric point
 
-```{r cells_phyc_paramterers, echo = FALSE, eval=FALSE}
+```{r cells_phyc_paramterers, echo = TRUE, eval=TRUE}
 t <- tT[, "t"]
 
 ## GRAVY score
@@ -402,6 +464,61 @@ ggplot(df, aes(x = iep, y = t)) +
     ggpubr::stat_cor(method = "spearman") +
     theme_classic()
 cor.test(iep, t, method = "spearman")
+```
+
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_cells, eval = TRUE}
+## gravy
+feat <- read.table(file = "unique_features_cells_Cells_AFA.txt", 
+    header = TRUE)
+gravy_other <- lapply(rowData(cells_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "unique_features_cells_Cells_TwoPhase_AFA.txt",
+    header = TRUE)
+gravy_tp <- lapply(rowData(cells_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_gravy_cells.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "unique_features_cells_Cells_AFA.txt", 
+    header = TRUE)
+iep_other <- lapply(rowData(cells_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "unique_features_cells_Cells_TwoPhase_AFA.txt",
+    header = TRUE)
+iep_tp <- lapply(rowData(cells_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_iep_cells.pdf", 
+    method = "wilcox.test", paired = FALSE)
 ```
 
 
@@ -452,6 +569,7 @@ write.table(feat, file = "unique_features_ff_contrast1_powder_TwoPhase.txt",
     quote = FALSE, row.names = FALSE)
 
 ## continue only with the overlap
+ff_1_all <- ff_1
 feat <- extractComb(ff_1, combination = c("powder_AFA", "powder_TwoPhase_AFA"), 
     measured = TRUE, category = "condition")
 ff_1 <- ff_1[feat,]
@@ -524,7 +642,7 @@ rmarkdown::paged_table(topGO(allRes, ontology = "CC", number = num))
 
 Take the t-values and plot against the GRAVY-Score and Isoelectric point
 
-```{r ff_1_phyco, echo = FALSE, eval = FALSE}
+```{r ff_1_phyco, echo = TRUE, eval = TRUE}
 t <- tT[, "t"]
 
 ## GRAVY score
@@ -551,6 +669,61 @@ ggplot(df, aes(x = iep, y = t)) +
 cor.test(iep, t, method = "spearman")
 ```
 
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_ff1}
+## gravy
+feat <- read.table(file = "unique_features_ff_contrast1_powder.txt", 
+    header = TRUE)
+gravy_other <- lapply(rowData(ff_1_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "unique_features_ff_contrast1_powder_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(rowData(ff_1_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_gravy_freshfrozen_1.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "unique_features_ff_contrast1_powder.txt", 
+    header = TRUE)
+iep_other <- lapply(rowData(ff_1_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "unique_features_ff_contrast1_powder_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(rowData(ff_1_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_iep_freshfrozen_1.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+
 ## Fresh-frozen: Overlap, uniqueness of features (contrast 2)
 
 The plot shows the interaction of sets between different variables depending on
@@ -576,6 +749,8 @@ feat <- extractComb(ff_2, combination = c("powder_TwoPhase_AFA"),
 write.table(feat, file = "unique_features_ff_contrast2_powder_TwoPhase.txt",
     quote = FALSE, row.names = FALSE)
 
+## continue only with the overlap
+ff_2_all <- ff_2
 feat <- extractComb(ff_2, 
     combination = c("Tissue_bulk_AFA", "powder_TwoPhase_AFA"), 
     measured = TRUE, category = "condition")
@@ -622,18 +797,24 @@ and Cellular Component (CC). Perform a Fisher test with the significant features
 ```{r enrichment_ff_2, message=FALSE, warning=FALSE, echo = FALSE, eval = TRUE}
 allRes <- enrichment(tT, organism = "Mm")
 print("## BP")
-rmarkdown::paged_table(topGO(allRes, ontology = "BP", number = num))
+bp <- topGO(allRes, ontology = "BP", number = num)
+rmarkdown::paged_table(bp)
+ggsave(plotGO(bp, xlab = "Biological Process"), file = "GO_FF_BP.pdf")
 print("## MF")
-rmarkdown::paged_table(topGO(allRes, ontology = "MF", number = num))
+mf <- topGO(allRes, ontology = "MF", number = num)
+rmarkdown::paged_table(mf)
+ggsave(plotGO(mf, xlab = "Molecular Function"), file = "GO_FF_MF.pdf")
 print("## CC")
-rmarkdown::paged_table(topGO(allRes, ontology = "CC", number = num))
+cc <- topGO(allRes, ontology = "CC", number = num)
+rmarkdown::paged_table(cc)
+ggsave(plotGO(cc, xlab = "Cellular Component"), file = "GO_FF_CC.pdf")
 ```
 
 ## Fresh-frozen: Association to physico-chemical parameters (contrast 2)
 
 Take the t-values and plot against the GRAVY-Score and Isoelectric point
 
-```{r ff_phyco_parameters, echo = FALSE, eval = FALSE}
+```{r ff_phyco_parameters, echo = TRUE, eval = TRUE}
 t <- tT[, "t"]
 
 ## GRAVY score
@@ -661,12 +842,66 @@ cor.test(iep, t, method = "spearman")
 ```
 
 
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_ff2}
+## gravy
+feat <- read.table(file = "unique_features_ff_contrast2_Tissue_bulk.txt", 
+    header = TRUE)
+gravy_other <- lapply(rowData(ff_2_all)[feat[, 1], "sequence"], function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "unique_features_ff_contrast2_powder_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(rowData(ff_2_all)[feat[, 1], "sequence"], function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_gravy_freshfrozen_2.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "unique_features_ff_contrast2_Tissue_bulk.txt", 
+    header = TRUE)
+iep_other <- lapply(rowData(ff_2_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "unique_features_ff_contrast2_powder_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(rowData(ff_2_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_iep_freshfrozen_2.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+
+
 # FFPE
 
 contrasts:
 
   - powder_AFA - powder_TwoPhase_AFA (contrast 1)
-  - FFPE_AFA - powder_TwoPhase_AFA (contrast 2)
+  - bulk_FFPE_AFA - powder_TwoPhase_AFA (contrast 2)
   
 Upset plot for all condition types.
 
@@ -709,6 +944,7 @@ write.table(feat, file = "unique_features_ffpe_contrast1_TwoPhase.txt",
     quote = FALSE, row.names = FALSE)
 
 ## continue only with the overlap
+ffpe_1_all <- ffpe_1
 feat <- extractComb(ffpe_1, combination = c("powder_AFA", "powder_TwoPhase_AFA"), 
     measured = TRUE, category = "condition")
 ffpe_1 <- ffpe_1[feat,]
@@ -784,7 +1020,7 @@ rmarkdown::paged_table(topGO(allRes, ontology = "CC",
 
 Take the t-values and plot against the GRAVY-Score and Isoelectric point
 
-```{r ffpe_1_phyco, echo = FALSE, eval=FALSE}
+```{r ffpe_1_phyco, echo = TRUE, eval=TRUE}
 t <- tT[, "t"]
 
 ## GRAVY score
@@ -810,6 +1046,62 @@ ggplot(df, aes(x = iep, y = t)) +
     theme_classic()
 cor.test(iep, t, method = "spearman")
 ```
+
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_ffpe1}
+## gravy
+feat <- read.table(file = "unique_features_ffpe_contrast1_powder.txt", 
+    header = TRUE)
+gravy_other <- lapply(rowData(ffpe_1_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "unique_features_ffpe_contrast1_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(rowData(ffpe_1_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_gravy_FFPE_1.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "unique_features_ffpe_contrast1_powder.txt", 
+    header = TRUE)
+iep_other <- lapply(rowData(ffpe_1_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "unique_features_ffpe_contrast1_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(rowData(ffpe_1_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_iep_FFPE_1.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
 
 ## FFPE: Overlap, uniqueness of features (contrast 2)
 
@@ -837,6 +1129,7 @@ write.table(feat, file = "unique_features_ffpe_contrast2_powder_TwoPhase.txt",
     quote = FALSE, row.names = FALSE)
 
 ## continue only with the overlap
+ffpe_2_all <- ffpe_2
 feat <- extractComb(ffpe_2, combination = c("FFPE_AFA", "powder_TwoPhase_AFA"), 
     measured = TRUE, category = "condition")
 ffpe_2 <- ffpe_2[feat,]
@@ -881,24 +1174,32 @@ Run now the GO enrichment tests. Use the raw (unadjusted) values and return
 the GO terms for the ontologies Biological Process (BP), Molecular Function (MF)
 and Cellular Component (CC). Perform a Fisher test with the significant features
 ($\alpha$ < 0.05).
+
+
 ```{r enrichment_ffpe_2, message=FALSE, warning=FALSE, echo = FALSE}
 allRes <- enrichment(tT, organism = "Hs")
 print("## BP")
-rmarkdown::paged_table(topGO(allRes, ontology = "BP", 
-    number = nrow(allRes[allRes[, "Ont"] == "BP", ])))
+bp <- topGO(allRes, ontology = "BP", 
+    number = nrow(allRes[allRes[, "Ont"] == "BP", ]))
+rmarkdown::paged_table(bp)
+ggsave(plotGO(bp, xlab = "Biological Process"), file = "GO_FFPE_BP.pdf")
 print("## MF")
-rmarkdown::paged_table(topGO(allRes, ontology = "MF", 
-    number = nrow(allRes[allRes[, "Ont"] == "MF", ])))
+mf <- topGO(allRes, ontology = "MF", 
+    number = nrow(allRes[allRes[, "Ont"] == "MF", ]))
+rmarkdown::paged_table(mf)
+ggsave(plotGO(mf, xlab = "Molecular Function"), file = "GO_FFPE_MF.pdf")
 print("## CC")
-rmarkdown::paged_table(topGO(allRes, ontology = "CC", 
-    number = nrow(allRes[allRes[, "Ont"] == "CC", ])))
+cc <- topGO(allRes, ontology = "CC", 
+    number = nrow(allRes[allRes[, "Ont"] == "CC", ]))
+rmarkdown::paged_table(cc)
+ggsave(plotGO(cc, xlab = "Cellular Component"), file = "GO_FFPE_CC.pdf")
 ```
 
 ## FFPE: Association to physico-chemical parameters (contrast 2)
 
 Take the t-values and plot against the GRAVY-Score and Isoelectric point
 
-```{r ffpe_2_phyco, echo = FALSE, eval=FALSE}
+```{r ffpe_2_phyco, echo = TRUE, eval=TRUE}
 t <- tT[, "t"]
 
 ## GRAVY score
@@ -924,6 +1225,63 @@ ggplot(df, aes(x = iep, y = t)) +
     theme_classic()
 cor.test(iep, t, method = "spearman")
 ```
+
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_ffpe2}
+## gravy
+feat <- read.table(file = "unique_features_ffpe_contrast2_FFPE.txt", 
+    header = TRUE)
+gravy_other <- lapply(rowData(ffpe_2_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "unique_features_ffpe_contrast2_powder_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(rowData(ffpe_2_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_gravy_FFPE_2.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "unique_features_ffpe_contrast2_FFPE.txt", 
+    header = TRUE)
+iep_other <- lapply(rowData(ffpe_2_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "unique_features_ffpe_contrast2_powder_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(rowData(ffpe_2_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_iep_FFPE_2.pdf", 
+    method = "wilcox.test", paired = FALSE)
+```
+
+
 
 # Plasma
 
@@ -971,6 +1329,7 @@ write.table(feat, file = "unique_features_plasma_Plasma_TwoPhase.txt",
     quote = FALSE, row.names = FALSE)
 
 ## continue only with the overlap
+plasma_all <- plasma
 feat <- extractComb(plasma, combination = c("Plasma_AFA", "Plasma_TwoPhase_AFA"), 
     measured = TRUE, category = "condition")
 plasma <- plasma[feat,]
@@ -1029,21 +1388,24 @@ and Cellular Component (CC). Perform a Fisher test with the significant features
 ```{r enrichment_plasma, message=FALSE, warning=FALSE, echo = FALSE}
 allRes <- enrichment(tT, organism = "Hs")
 print("## BP")
-rmarkdown::paged_table(topGO(allRes, ontology = "BP", 
-    number = nrow(allRes[allRes[, "Ont"] == "BP", ])))
+bp <- topGO(allRes, ontology = "BP", number = num)
+rmarkdown::paged_table(bp)
+ggsave(plotGO(bp, xlab = "Biological Process"), file = "GO_Plasma_BP.pdf")
 print("## MF")
-rmarkdown::paged_table(topGO(allRes, ontology = "MF", 
-    number = nrow(allRes[allRes[, "Ont"] == "MF", ])))
+mf <- topGO(allRes, ontology = "MF", number = num)
+rmarkdown::paged_table(mf)
+ggsave(plotGO(mf, xlab = "Molecular Function"), file = "GO_Plasma_MF.pdf")
 print("## CC")
-rmarkdown::paged_table(topGO(allRes, ontology = "CC", 
-    number = nrow(allRes[allRes[, "Ont"] == "CC", ])))
+cc <- topGO(allRes, ontology = "CC", number = num)
+rmarkdown::paged_table(cc)
+ggsave(plotGO(cc, xlab = "Cellular Component"), file = "GO_Plasma_CC.pdf")
 ```
 
 ## Plasma: Association to physico-chemical parameters
 
 Take the t-values and plot against the GRAVY-Score and Isoelectric point.
 
-```{r plasma_phyco, echo = FALSE, eval=FALSE}
+```{r plasma_phyco, echo = TRUE, eval=TRUE}
 t <- tT[, "t"]
 
 ## GRAVY score
@@ -1068,6 +1430,61 @@ ggplot(df, aes(x = iep, y = t)) +
     ggpubr::stat_cor(method = "spearman") +
     theme_classic()
 cor.test(iep, t, method = "spearman")
+```
+
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_plasma}
+## gravy
+feat <- read.table(file = "unique_features_plasma_Plasma_AFA.txt", 
+    header = TRUE)
+gravy_other <- lapply(rowData(plasma_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "unique_features_plasma_Plasma_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(rowData(plasma_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_gravy_plasma.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "unique_features_plasma_Plasma_AFA.txt", 
+    header = TRUE)
+iep_other <- lapply(rowData(plasma_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "unique_features_plasma_Plasma_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(rowData(plasma_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_iep_plasma.pdf", 
+    method = "wilcox.test", paired = FALSE)
 ```
 
 
@@ -1117,6 +1534,7 @@ write.table(feat, file = "unique_features_serum_Serum_TwoPhase.txt",
     quote = FALSE, row.names = FALSE)
 
 ## continue only with the overlap
+serum_all <- serum
 feat <- extractComb(serum, combination = c("Serum_AFA", "Serum_TwoPhase_AFA"), 
     measured = TRUE, category = "condition")
 serum <- serum[feat,]
@@ -1173,21 +1591,24 @@ Cellular Component (CC). Perform a Fisher test with the significant features
 ```{r enrichment_serum, message=FALSE, warning=FALSE, echo = FALSE}
 allRes <- enrichment(tT, organism = "Hs")
 print("## BP")
-rmarkdown::paged_table(topGO(allRes, ontology = "BP", 
-    number = nrow(allRes[allRes[, "Ont"] == "BP", ])))
+bp <- topGO(allRes, ontology = "BP", number = num)
+rmarkdown::paged_table(bp)
+ggsave(plotGO(bp, xlab = "Biological Process"), file = "GO_Serum_BP.pdf")
 print("## MF")
-rmarkdown::paged_table(topGO(allRes, ontology = "MF", 
-    number = nrow(allRes[allRes[, "Ont"] == "MF", ])))
+mf <- topGO(allRes, ontology = "MF", number = num)
+rmarkdown::paged_table(mf)
+ggsave(plotGO(mf, xlab = "Molecular Function"), file = "GO_Serum_MF.pdf")
 print("## CC")
-rmarkdown::paged_table(topGO(allRes, ontology = "CC", 
-    number = nrow(allRes[allRes[, "Ont"] == "CC", ])))
+cc <- topGO(allRes, ontology = "CC", number = num)
+rmarkdown::paged_table(cc)
+ggsave(plotGO(cc, xlab = "Cellular Component"), file = "GO_Serum_CC.pdf")
 ```
 
 ## Serum: Association to physico-chemical parameters
 
 Take the t-values and plot against the GRAVY-Score and Isoelectric point.
 
-```{r serum_phyco, echo = FALSE, eval=FALSE}
+```{r serum_phyco, echo = TRUE, eval=TRUE}
 t <- tT[, "t"]
 
 ## GRAVY score
@@ -1212,6 +1633,61 @@ ggplot(df, aes(x = iep, y = t)) +
     ggpubr::stat_cor(method = "spearman") +
     theme_classic()
 cor.test(iep, t, method = "spearman")
+```
+
+
+Create violin plots for shared/unique features.
+
+```{r violin_phyco_serum}
+## gravy
+feat <- read.table(file = "unique_features_serum_Serum_AFA.txt", 
+    header = TRUE)
+gravy_other <- lapply(rowData(serum_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+feat <- read.table(file = "unique_features_serum_Serum_TwoPhase.txt",
+    header = TRUE)
+gravy_tp <- lapply(rowData(serum_all)[feat[, 1], "sequence"], 
+    function(aa) calculateGravyScore(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(gravy), "shared"), 
+    cbind(unlist(gravy_other), "autoSP3"),
+    cbind(unlist(gravy_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_gravy_serum.pdf", 
+    method = "wilcox.test", paired = FALSE)
+
+## iep
+feat <- read.table(file = "unique_features_serum_Serum_AFA.txt", 
+    header = TRUE)
+iep_other <- lapply(rowData(serum_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+feat <- read.table(file = "unique_features_serum_Serum_TwoPhase.txt",
+    header = TRUE)
+iep_tp <- lapply(rowData(serum_all)[feat[, 1], "sequence"], 
+    function(aa) calculateIsoelectricPoint(aa))
+
+## create df
+df <- data.frame(rbind(
+    cbind(unlist(iep), "shared"), 
+    cbind(unlist(iep_other), "autoSP3"),
+    cbind(unlist(iep_tp), "MTBE-SP3")))
+colnames(df) <- c("score", "type") 
+df$score <- as.numeric(df$score)
+df$type <- factor(df$type, levels = c("autoSP3", "MTBE-SP3", "shared")) 
+comparisons <- list( c("autoSP3", "shared"), c("MTBE-SP3", "shared"), 
+    c("autoSP3", "MTBE-SP3"))
+
+plot_violin_barplot(df = df, x = "type", y = "score", fill = "type",
+    comparisons = comparisons, file = "protein_violin_iep_serum.pdf", 
+    method = "wilcox.test", paired = FALSE)
 ```
 
 
