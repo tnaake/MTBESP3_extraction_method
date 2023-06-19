@@ -26,6 +26,7 @@ suppressPackageStartupMessages(library("MatrixQCvisUtils"))
 suppressPackageStartupMessages(library("PhysicoChemicalPropertiesProtein"))
 suppressPackageStartupMessages(library("tidyverse"))
 suppressPackageStartupMessages(library("limma"))
+library("ggbeeswarm")
 knitr::opts_knit$set(root.dir = "~/GitLab/20211202_extraction_method/")
 ```
 
@@ -97,8 +98,8 @@ se <- se[!rownames(se) %in% exclude_pattern, ]
 Perform `log`-transformation on the data set.
 
 ```{r data_transformation}
-## keep features with more than ca. 60% (21/35) measured values
-se <- se[rowSums(!is.na(assay(se))) >= 21 , ] 
+## keep features with more than ca. 60% (18/35) measured values
+se <- se[rowSums(!is.na(assay(se))) >= 18 , ]
 dim(se)
 
 ## transformation and imputation
@@ -270,12 +271,50 @@ autoSP3_sign <- tT_autoSP3[tT_autoSP3$adj.P.Val < 0.05 & !is.na(tT_autoSP3$adj.P
 MTBE_SP3_sign <- tT_MTBE_SP3[tT_MTBE_SP3$adj.P.Val < 0.05  & !is.na(tT_MTBE_SP3$adj.P.Val), ]
 
 ## create list
-l <- list(autoSP3 = rownames(autoSP3_sign), MTBE_SP3 = rownames(MTBE_SP3_sign))
+l <- list(autoSP3 = autoSP3_sign$ID, MTBE_SP3 = MTBE_SP3_sign$ID)
 UpSetR::upset(UpSetR::fromList(l), order.by = "freq")
 
 pdf("UpSet_NATvsTT_autoSP3_MTBESP3.pdf")
 UpSetR::upset(UpSetR::fromList(l), order.by = "freq")
 dev.off()
+
+## Can we say anything about the magnitude of the difference? E.g. the
+## overlapping 1004 proteins show on average a larger fold change than those
+## detected by only one of the methods? Show in a box plot.
+mtbe_auto_shared <- l$autoSP3[l$autoSP3 %in% l$MTBE_SP3]
+mtbe_unique <- l$MTBE_SP3[!(l$MTBE_SP3 %in% l$autoSP3)]
+auto_unique <- l$autoSP3[!(l$autoSP3 %in% l$MTBE_SP3)]
+
+df_mtbe_shared <- data.frame(
+    logFC = tT_MTBE_SP3[tT_MTBE_SP3$ID %in% mtbe_auto_shared, "logFC"],
+    set = "shared", type = "MTBE-SP3")
+df_auto_shared <- data.frame(
+    logFC = tT_autoSP3[tT_autoSP3$ID %in% mtbe_auto_shared, "logFC"],
+    set = "shared", type = "autoSP3")
+df_mtbe_unique <- data.frame(
+    logFC = tT_MTBE_SP3[tT_MTBE_SP3$ID %in% mtbe_unique, "logFC"],
+    set = "unique", type = "MTBE-SP3")
+df_auto_unique <- data.frame(
+    logFC = tT_autoSP3[tT_autoSP3$ID %in% auto_unique, "logFC"],
+    set = "unique", type = "autoSP3")
+df_all <- rbind(df_mtbe_shared, df_auto_shared, df_mtbe_unique, df_auto_unique)
+
+g <- ggplot(df_all) +
+    geom_beeswarm(aes(y = logFC, x = type), size = 0.5, alpha = 0.5) +
+    facet_wrap(~ set + type, ncol = 4, scales = "free_x") +
+    theme_classic()
+ggsave(filename = "BeeSwarm_NATvsTT_autoSP3_MTBESP3.pdf", plot = g)
+
+df_tmp <- df_all
+df_tmp$logFC <- abs(df_tmp$logFC)
+wilcox.test(
+    df_tmp[df_tmp$set == "shared" & df_tmp$type == "autoSP3", "logFC"],
+    df_tmp[df_tmp$set == "unique" & df_tmp$type == "autoSP3", "logFC"],
+    alternative = "greater")
+wilcox.test(
+    df_tmp[df_tmp$set == "shared" & df_tmp$type == "MTBE-SP3", "logFC"],
+    df_tmp[df_tmp$set == "unique" & df_tmp$type == "MTBE-SP3", "logFC"],
+    alternative = "greater")
 
 ## TU vs NG. (taking into account baseline autoSP3/MTBE-SP3)
 tT <- topTable(fit_eB, number = num, p.value = p_val, adjust.method = adj,
