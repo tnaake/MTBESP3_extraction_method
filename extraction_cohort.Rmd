@@ -408,3 +408,72 @@ cor(x = tT_MTBE_SP3_covariate$t[order(rownames(tT_MTBE_SP3_covariate))],
 ```
 
 
+## Tissue-heterogeneity
+
+We test here the effect of tissue heterogeneity within the 
+autoSP3 and MTBE-SP3 samples. Therefore, we randomly select 50% of the
+samples from within autoSP3 and MTBE-SP3 samples and run linear models 
+within each extraction method.
+
+In case of tissue heterogeneity, there should be some proteins that are 
+differentially abundant.
+
+```{r}
+se$Patient_ID <- stringr::str_remove(se$Pseudonym, pattern = "_TU|_NG")
+
+##
+## MTBE-SP3
+se_mtbesp3 <- se[, se$Processing == "MTBE_SP3"]
+ids_mtbesp3 <- se_mtbesp3$Patient_ID |> unique()
+set.seed(2023)
+ids_group1 <- sample(ids_mtbesp3, size = floor(length(ids_mtbesp3)/ 2),
+    replace = FALSE)
+se_mtbesp3$random_group <- ifelse(se_mtbesp3$Patient_ID %in% ids_group1, "1", "2")
+
+## run the linear model, adjust for the tissue effect
+design <- model.matrix(~ 0 + random_group + Type , data = colData(se_mtbesp3))
+colnames(design) <- make.names(colnames(design))
+fit <- lmFit(object = assay(se_mtbesp3), design = design)
+
+## make contrasts
+contrasts <- makeContrasts(
+    group1_vs_group2 = random_group1 - random_group2,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+## get the features for MTBE-SP3
+tT_MTBESP3 <- topTable(fit_eB, number = num, p.value = p_val, 
+    adjust.method = adj)
+sum(tT_MTBESP3[, "adj.P.Val"] < 0.05)
+rmarkdown::paged_table(tT_MTBESP3)
+
+
+##
+## autoSP3
+se_autosp3 <- se[, se$Processing == "autoSP3"]
+ids_autosp3 <- se_autosp3$Patient_ID |> unique()
+set.seed(2023)
+ids_group1 <- sample(ids_autosp3, size = floor(length(ids_autosp3)/ 2), 
+    replace = FALSE)
+se_autosp3$random_group <- ifelse(se_autosp3$Patient_ID %in% ids_group1, "1", "2")
+
+## run the linear model, adjust for the tissue effect
+design <- model.matrix(~ 0 + random_group + Type , data = colData(se_autosp3))
+colnames(design) <- make.names(colnames(design))
+fit <- lmFit(object = assay(se_autosp3), design = design)
+
+## make contrasts
+contrasts <- makeContrasts(
+    group1_vs_group2 = random_group1 - random_group2,
+    levels = design)
+fit_c <- contrasts.fit(fit, contrasts)
+fit_eB <- eBayes(fit_c)
+
+## get the features for MTBE-SP3
+tT_autoSP3 <- topTable(fit_eB, number = num, p.value = p_val, 
+    adjust.method = adj)
+sum(tT_autoSP3[, "adj.P.Val"] < 0.05)
+rmarkdown::paged_table(tT_autoSP3)
+
+```
