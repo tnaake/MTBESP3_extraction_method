@@ -79,7 +79,7 @@ plotGO <- function(go, xlab = "Biological Process", ylab = "-log10(p-value)", n 
         theme_classic() +
         theme(
             legend.position = 'none',
-            axis.text.x = element_text(angle = 0, size = 10, hjust = 1.10),
+            axis.text.x = element_text(angle = 0, size = 9, hjust = 1.10),
             axis.text.y = element_text(angle = 0, size = 10, vjust = 0.5),
         axis.title = element_text(size = 12)) +
         guides(colour = guide_legend(override.aes = list(size = 2.5))) +
