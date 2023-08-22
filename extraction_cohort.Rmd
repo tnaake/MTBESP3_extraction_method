@@ -364,7 +364,185 @@ g <- ggplot(df, aes_string(x = "vals_y", y = "vals_z")) +
     theme(legend.position = "none")
 g 
 ggsave(g, filename = "scatter_NATvsTT_MTBESP3_autoSP3vsMTBESP3.pdf")
+```
 
+
+
+### GO enrichment analysis TU vs NG (autoSP3)
+
+```{r go_fct, message=FALSE, warning=FALSE, echo = FALSE}
+## load the packages
+library("org.Hs.eg.db")
+
+## define the significance level for enrichment
+signProts <- function(allScore) {
+   return(allScore <= 0.05)
+}
+
+## all takes the proteins into account with p < 0.05
+## up takes the proteins into account with p < 0.05 AND t > 0
+## down takes the proteins into account with p < 0.05 AND t < 0
+enrichment <- function(tT, organism = "Hs", de = c("all", "up", "down")) {
+    
+    de <- match.arg(de)
+    ## translate from UNIPROT into SYMBOL
+    ## conversion between id's 
+    if (organism == "Hs") {
+        symbols <- Rkeys(org.Hs.egSYMBOL)
+        dict <- AnnotationDbi::select(org.Hs.eg.db, symbols, "ENTREZID", "SYMBOL")
+        species <- "Hs"
+    }
+    symbol <- dict$SYMBOL
+    entrez <- dict$ENTREZID
+    names(entrez) <- symbol
+    
+    ## some proteins have multiple symbol ids, only keep the first
+    tT$ID <- unlist(lapply(strsplit(tT$ID, split = "[;]"), "[", 1))
+    tT <- tT[!duplicated(tT$ID), ]
+    rownames(tT) <- tT$ID
+    
+    ## translate into entrez
+    tT_entrez <- as.character(entrez[rownames(tT)])
+    tT <- tT[!is.na(tT_entrez), ]
+    tT_entrez <- tT_entrez[!is.na(tT_entrez)]
+    tT <- tT[!duplicated(tT_entrez), ]
+    tT_entrez <- tT_entrez[!duplicated(tT_entrez)]
+    rownames(tT) <- tT_entrez
+    
+    ## use the p-values from the raw-intensity derived values
+    tT <- tT[!is.na(tT[, "adj.P.Val"]), ]
+    
+    if (de == "all") {
+        tT_de <- tT[tT[, "adj.P.Val"] < 0.05, ]  
+    }
+    if (de == "up") {
+        tT_de <- tT[tT[, "adj.P.Val"] < 0.05 & tT[, "t"] > 0, ]  
+    }
+    if (de == "down") {
+        tT_de <- tT[tT[, "adj.P.Val"] < 0.05 & tT[, "t"] < 0, ]  
+    }
+    
+    allRes <- goana(de = rownames(tT_de), 
+          universe = rownames(tT), species = species)
+    
+    ## return the results
+    allRes
+}
+
+plotGO <- function(go, xlab = "Biological Process", ylab = "-log10(p-value)", n = 20) {
+    go$new_term <- go$Term
+    #go$new_term <- paste(rownames(go), go$Term, sep = ",")
+    go <- go[order(go$P.DE)[1:n], ]
+    go <- go[go$P.DE < 0.05, ]
+    go$new_term <- factor(x = go$new_term, levels = go$new_term[n:1])
+    go <- go[!is.na(go$new_term), ]
+    
+    ggplot(go, aes(x = new_term, y = -log10(P.DE))) +
+        stat_summary(geom = "bar", fun = "mean", position = "identity") +
+        xlab(xlab) +
+        ylab(ylab) +
+        theme_classic() +
+        theme(
+            legend.position = 'none',
+            axis.text.x = element_text(angle = 0, size = 10, hjust = 1.10),
+            axis.text.y = element_text(angle = 0, size = 9, vjust = 0.5),
+        axis.title = element_text(size = 12)) +
+        guides(colour = guide_legend(override.aes = list(size = 2.5))) +
+        coord_flip()
+}
+```
+
+Run now the GO enrichment tests. Use the raw (unadjusted) values and return
+the GO terms for the ontologies Biological Process (BP), Molecular Function (MF) 
+and Cellular Component (CC). Perform a Fisher test with the significant features
+($\alpha$ < 0.05).
+
+For autoSP3.
+```{r enrichment_cells_autoSP3, message=FALSE, warning=FALSE, echo = FALSE}
+allRes <- enrichment(tT_autoSP3, organism = "Hs")
+
+print("## BP")
+bp <- topGO(allRes, ontology = "BP", number = num)
+rmarkdown::paged_table(bp)
+ggsave(plotGO(bp, xlab = "Biological Process"), file = "GO_TUvsNAT_autoSP3_BP.pdf")
+
+print("## MF")
+mf <- topGO(allRes, ontology = "MF", number = num)
+rmarkdown::paged_table(mf)
+ggsave(plotGO(mf, xlab = "Molecular Function"), file = "GO_TUvsNAT_autoSP3_MF.pdf")
+
+print("## CC")
+cc <- topGO(allRes, ontology = "CC", number = num)
+rmarkdown::paged_table(cc)
+ggsave(plotGO(cc, xlab = "Cellular Component"), file = "GO_TUvsNAT_autoSP3_CC.pdf")
+
+## how many significant terms with "Mitochondria|mitochondria"?
+.pattern = "Mitochondria|mitochondria|Glycolysis|glycolysis|Glycolytic|glycolytic|Tricarboxylic acid|tricarboxylic acid"
+print("## BP mitochondria:")
+bp_mito <- bp[grepl(bp$Term, pattern = .pattern) & bp$P.DE < 0.05, ]
+nrow(bp_mito)
+rmarkdown::paged_table(bp_mito)
+ggsave(plotGO(bp_mito, xlab = "Biological Process"), file = "GO_TUvsNAT_autoSP3_mito_BP.pdf")
+
+print("## MF mitochondria:")
+mf_mito <- mf[grepl(mf$Term, pattern = .pattern) & mf$P.DE < 0.05, ]
+nrow(mf_mito)
+rmarkdown::paged_table(mf_mito)
+ggsave(plotGO(mf_mito, xlab = "Molecular Function"), file = "GO_TUvsNAT_autoSP3_mito_MF.pdf")
+
+print("## CC mitochondria:")
+cc_mito <- cc[grepl(cc$Term, pattern = .pattern) & cc$P.DE < 0.05, ]
+nrow(cc_mito)
+rmarkdown::paged_table(cc_mito)
+ggsave(plotGO(cc_mito, xlab = "Cellular Component"), file = "GO_TUvsNAT_autoSP3_mito_CC.pdf")
+```
+
+### GO enrichment analysis TU vs NG (MTBE-SP3)
+
+Run now the GO enrichment tests. Use the raw (unadjusted) values and return
+the GO terms for the ontologies Biological Process (BP), Molecular Function (MF) 
+and Cellular Component (CC). Perform a Fisher test with the significant features
+($\alpha$ < 0.05).
+
+For MTBE-SP3. 
+```{r enrichment_cells_MTBESP3, message=FALSE, warning=FALSE, echo = FALSE}
+allRes <- enrichment(tT_MTBE_SP3, organism = "Hs")
+
+print("## BP")
+bp <- topGO(allRes, ontology = "BP", number = num)
+rmarkdown::paged_table(bp)
+ggsave(plotGO(bp, xlab = "Biological Process"), file = "GO_TUvsNAT_MTBESP3_BP.pdf")
+
+print("## MF")
+mf <- topGO(allRes, ontology = "MF", number = num)
+rmarkdown::paged_table(mf)
+ggsave(plotGO(mf, xlab = "Molecular Function"), file = "GO_TUvsNAT_MTBESP3_MF.pdf")
+
+print("## CC")
+cc <- topGO(allRes, ontology = "CC", number = num)
+rmarkdown::paged_table(cc)
+ggsave(plotGO(cc, xlab = "Cellular Component"), file = "GO_TUvsNAT_MTBESP3_CC.pdf")
+
+
+## how many significant terms with "Mitochondria|mitochondria"?
+.pattern = "Mitochondria|mitochondria|Glycolysis|glycolysis|Glycolytic|glycolytic|Tricarboxylic acid|tricarboxylic acid"
+print("## BP mitochondria:")
+bp_mito <- bp[grepl(bp$Term, pattern = .pattern) & bp$P.DE < 0.05, ]
+nrow(bp_mito)
+rmarkdown::paged_table(bp_mito)
+ggsave(plotGO(bp_mito, xlab = "Biological Process"), file = "GO_TUvsNAT_MTBESP3_mito_BP.pdf")
+
+print("## MF mitochondria:")
+mf_mito <- mf[grepl(mf$Term, pattern = .pattern) & mf$P.DE < 0.05, ]
+nrow(mf_mito)
+rmarkdown::paged_table(mf_mito)
+ggsave(plotGO(mf_mito, xlab = "Molecular Function"), file = "GO_TUvsNAT_MTBESP3_mito_MF.pdf")
+
+print("## CC mitochondria:")
+cc_mito <- cc[grepl(cc$Term, pattern = .pattern) & cc$P.DE < 0.05, ]
+nrow(cc_mito)
+rmarkdown::paged_table(cc_mito)
+ggsave(plotGO(cc_mito, xlab = "Cellular Component"), file = "GO_TUvsNAT_MTBESP3_mito_CC.pdf")
 
 ```
 
@@ -431,7 +609,7 @@ ids_group1 <- sample(ids_mtbesp3, size = floor(length(ids_mtbesp3)/ 2),
 se_mtbesp3$random_group <- ifelse(se_mtbesp3$Patient_ID %in% ids_group1, "1", "2")
 
 ## run the linear model, adjust for the tissue effect
-design <- model.matrix(~ 0 + random_group + Type , data = colData(se_mtbesp3))
+design <- model.matrix(~ 0 + random_group + Type, data = colData(se_mtbesp3))
 colnames(design) <- make.names(colnames(design))
 fit <- lmFit(object = assay(se_mtbesp3), design = design)
 
@@ -445,7 +623,7 @@ fit_eB <- eBayes(fit_c)
 ## get the features for MTBE-SP3
 tT_MTBESP3 <- topTable(fit_eB, number = num, p.value = p_val, 
     adjust.method = adj)
-sum(tT_MTBESP3[, "adj.P.Val"] < 0.05)
+sum(tT_MTBESP3[, "adj.P.Val"] < 0.05, na.rm = TRUE)
 rmarkdown::paged_table(tT_MTBESP3)
 
 
