@@ -98,7 +98,7 @@ se <- se[!rownames(se) %in% exclude_pattern, ]
 Perform `log`-transformation on the data set.
 
 ```{r data_transformation}
-## keep features with more than ca. 60% (18/35) measured values
+## keep features with more than ca. 50% (18/35) measured values
 se <- se[rowSums(!is.na(assay(se))) >= 18 , ]
 dim(se)
 
